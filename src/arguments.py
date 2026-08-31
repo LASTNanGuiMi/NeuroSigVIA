@@ -1,4 +1,5 @@
 import argparse
+import math
 
 VIT_NAME = [
     "laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
@@ -13,6 +14,72 @@ VIT_NAME = [
     "facebook/vit-mae-large",
     "facebook/vit-mae-huge",
 ]
+
+
+def parse_med_activity_patch_lengths(value):
+    try:
+        patch_lengths = tuple(int(item.strip()) for item in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Med activity patch lengths must be comma-separated integers."
+        ) from exc
+
+    if len(patch_lengths) != 3:
+        raise argparse.ArgumentTypeError(
+            "Med activity graphs require exactly three patch lengths for RGB encoding."
+        )
+    if any(length <= 0 for length in patch_lengths):
+        raise argparse.ArgumentTypeError("Med activity patch lengths must be positive.")
+    if tuple(sorted(set(patch_lengths))) != patch_lengths:
+        raise argparse.ArgumentTypeError(
+            "Med activity patch lengths must be unique and strictly increasing."
+        )
+    return patch_lengths
+
+
+def parse_med_activity_granularity_bank(value):
+    regimes = []
+    for raw_regime in value.split(";"):
+        raw_regime = raw_regime.strip()
+        if not raw_regime:
+            raise argparse.ArgumentTypeError(
+                "Granularity-bank regimes must be separated by semicolons."
+            )
+        try:
+            patch_lengths = tuple(
+                int(item.strip()) for item in raw_regime.split(",")
+            )
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                "Granularity experts must contain comma-separated integers."
+            ) from exc
+        if len(patch_lengths) not in {1, 3}:
+            raise argparse.ArgumentTypeError(
+                "Each granularity expert must contain one single scale or "
+                "three legacy RGB scales."
+            )
+        if any(length <= 0 for length in patch_lengths):
+            raise argparse.ArgumentTypeError(
+                "Granularity expert patch lengths must be positive."
+            )
+        if (
+            len(patch_lengths) == 3
+            and tuple(sorted(set(patch_lengths))) != patch_lengths
+        ):
+            raise argparse.ArgumentTypeError(
+                "A legacy RGB expert requires three unique increasing lengths."
+            )
+        regimes.append(patch_lengths)
+    granularity_bank = tuple(regimes)
+    if len(granularity_bank) < 2:
+        raise argparse.ArgumentTypeError(
+            "Adaptive granularity requires at least two candidate regimes."
+        )
+    if len(set(granularity_bank)) != len(granularity_bank):
+        raise argparse.ArgumentTypeError(
+            "Adaptive granularity candidate regimes must be unique."
+        )
+    return granularity_bank
 
 
 def parse_args():
@@ -75,11 +142,310 @@ def parse_args():
             "line_plot",
             "multichannel_line_plot",
             "activity_graph",
+            "med_activity_graph",
             "activity_matrix",
             "segment",
         ],
         default="line_plot",
         help="How to convert each time series into an image for the vision backbone",
+    )
+
+    parser.add_argument(
+        "--med_activity_patch_lengths",
+        type=parse_med_activity_patch_lengths,
+        default=(2, 4, 8),
+        help=(
+            "Three increasing comma-separated patch lengths mapped to the red, "
+            "green, and blue planes of med_activity_graph"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_channel_mix",
+        type=float,
+        default=0.35,
+        help="Cross-channel propagation strength used by med_activity_graph",
+    )
+
+    parser.add_argument(
+        "--med_activity_router_temperature",
+        type=float,
+        default=0.2,
+        help="Softmax temperature for cross-scale router exchange",
+    )
+
+    parser.add_argument(
+        "--med_activity_router_mix",
+        type=float,
+        default=0.5,
+        help="Strength of cross-scale router exchange used by med_activity_graph",
+    )
+
+    parser.add_argument(
+        "--med_activity_adaptive_granularity",
+        action="store_true",
+        help=(
+            "Extract a bank of full RGB med-activity graphs and learn a "
+            "sample-wise granularity selector in the MLP fusion head"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_bank",
+        type=parse_med_activity_granularity_bank,
+        default=None,
+        help=(
+            "Semicolon-separated graph experts. A single number denotes one "
+            "neutral-RGB scale, for example '4;8;16'; three comma-separated "
+            "numbers retain the legacy multi-scale RGB renderer. Defaults are "
+            "mode-specific: '4;8;16' for patch_mindts and the legacy bank for "
+            "sample-level routing"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_hidden_dim",
+        type=int,
+        default=64,
+        help=(
+            "Hidden width of the Mantis channel-attention pool in patch_mindts; "
+            "also retained for the legacy sample-level selector"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_temperature",
+        type=float,
+        default=None,
+        help=(
+            "Softmax temperature of the granularity selector. Defaults to "
+            "1.0 for bounded-RBF patch_mindts v4 and the legacy sample-level "
+            "ATGS path"
+        ),
+    )
+
+    parser.add_argument(
+        "--patch_granularity_router_mode",
+        choices=["adaptive_v4", "adaptive_v41", "adaptive_v5", "uniform"],
+        default="adaptive_v4",
+        help=(
+            "Patch-level graph router: legacy bounded-RBF v4, confidence-gated "
+            "scale-specific v4.1, project-specific line-Q/graph-KV v5 with "
+            "TimeMosaic-inspired patch-local decisions and Pathformer-inspired "
+            "sparse top-k experts, or a formal fixed-uniform baseline"
+        ),
+    )
+
+    parser.add_argument(
+        "--patch_checkpoint_metric",
+        choices=["auto", "subject_macro_f1", "window_macro_f1"],
+        default="auto",
+        help=(
+            "Checkpoint unit. auto selects subject macro-F1 only when validated "
+            "disjoint per-sample subject IDs are available"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_base_prior",
+        type=float,
+        default=0.9,
+        help="Initial selector probability assigned to the legacy patch regime",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_balance_weight",
+        type=float,
+        default=0.01,
+        help=(
+            "Weight of the router usage regularizer. patch_mindts uses an EMA "
+            "minimum-usage floor; legacy ATGS retains batch balance"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_entropy_weight",
+        type=float,
+        default=None,
+        help=(
+            "Weight of the router entropy-band regularizer. Defaults to 0.01 "
+            "for patch_mindts and 0.001 for legacy sample-level ATGS"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_mix_shrinkage_weight",
+        type=float,
+        default=0.005,
+        help="Weight shrinking v4 sample-global and patch-local routing mixtures",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_prior_kl_weight",
+        type=float,
+        default=0.001,
+        help="Weight keeping the v4 dataset-level routing prior near uniform",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_usage_floor",
+        type=float,
+        default=0.05,
+        help="Minimum long-run EMA usage assigned to every graph expert",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_usage_ema_decay",
+        type=float,
+        default=0.95,
+        help="EMA decay retained for patch_mindts long-run usage diagnostics",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_entropy_floor",
+        type=float,
+        default=None,
+        help=(
+            "Minimum normalized mean routing entropy allowed without a penalty; "
+            "defaults to 0.55 for patch_mindts and 0 for legacy routing"
+        ),
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_entropy_ceiling",
+        type=float,
+        default=1.0,
+        help="Normalized mean Softmax entropy allowed without a penalty",
+    )
+
+    parser.add_argument(
+        "--med_activity_granularity_local_mix_max",
+        type=float,
+        default=0.50,
+        help="Upper bound on the v4 patch-local routing mixture",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_local_mix_init",
+        type=float,
+        default=0.10,
+        help="Initial v4 patch-local routing mixture",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_global_mix_max",
+        type=float,
+        default=0.75,
+        help="Upper bound on the v4 sample-global routing mixture",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_global_mix_init",
+        type=float,
+        default=0.50,
+        help="Initial v4 sample-global routing mixture",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_evidence_half_saturation",
+        type=float,
+        default=0.05,
+        help="Raw candidate dissimilarity yielding a 0.5 v4 evidence gate",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_minimum_weight",
+        type=float,
+        default=0.0,
+        help="Optional explicit minimum probability for every graph expert",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_score_cap",
+        type=float,
+        default=1.0,
+        help="Absolute cap applied to centered v4 routing logits",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_scorer_hidden_dim",
+        type=int,
+        default=32,
+        help="Hidden width of every scale-specific nonlinear v4.1 scorer",
+    )
+    parser.add_argument(
+        "--med_activity_granularity_confidence_half_saturation",
+        type=float,
+        default=0.05,
+        help=(
+            "Top1-minus-top2 probability margin yielding a 0.5 confidence "
+            "gate in the v4.1 router"
+        ),
+    )
+    parser.add_argument(
+        "--patch_router_top_k",
+        type=int,
+        default=2,
+        help=(
+            "Number of graph-scale experts retained by adaptive_v5. The sparse "
+            "top-k expert pattern is Pathformer-inspired; the scores remain the "
+            "project's line-Q/graph-KV relation scores"
+        ),
+    )
+    parser.add_argument(
+        "--patch_router_training_noise_std",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional standard deviation of training-only v5 router-logit noise. "
+            "Pathformer-style noisy gating is opt-in; the default 0 keeps train "
+            "and inference routing identical"
+        ),
+    )
+    parser.add_argument(
+        "--patch_router_local_weight",
+        type=float,
+        default=0.5,
+        help=(
+            "Weight of patch-local line-Q/graph-KV relation evidence in the v5 "
+            "route; the patch-local decision scope is TimeMosaic-inspired"
+        ),
+    )
+    parser.add_argument(
+        "--patch_router_relation_hidden_dim",
+        type=int,
+        default=16,
+        help="Hidden width of the adaptive_v5 line-Q/graph-KV relation scorer",
+    )
+    parser.add_argument(
+        "--patch_router_relation_residual_scale",
+        type=float,
+        default=0.25,
+        help="Residual scale of the adaptive_v5 learned Q/K relation score",
+    )
+    parser.add_argument(
+        "--patch_router_key_adapter_scale",
+        type=float,
+        default=0.1,
+        help="Residual scale of each adaptive_v5 graph-key adapter",
+    )
+    parser.add_argument(
+        "--patch_router_value_adapter_scale",
+        type=float,
+        default=0.1,
+        help="Residual scale of each adaptive_v5 graph-value expert adapter",
+    )
+    parser.add_argument(
+        "--patch_router_route_budget_weight",
+        type=float,
+        default=0.005,
+        help=(
+            "Weight of adaptive_v5 MSE between the sample-equal post-top-k "
+            "expert marginal and uniform usage; paired with load balance, the "
+            "default total router regularization is 0.01"
+        ),
+    )
+    parser.add_argument(
+        "--patch_router_load_balance_weight",
+        type=float,
+        default=0.005,
+        help=(
+            "Weight of the Pathformer-inspired adaptive_v5 CV-squared load "
+            "penalty on the sample-equal pre-top-k clean-softmax marginal"
+        ),
     )
 
     parser.add_argument(
@@ -160,15 +526,114 @@ def parse_args():
         "--mlp_early_stop_patience",
         type=int,
         default=0,
-        help="Stop MLP training after this many epochs without val macro F1 improvement",
+        help=(
+            "Stop MLP training after this many epochs without improvement in "
+            "the effective window- or subject-level checkpoint criterion"
+        ),
+    )
+
+    parser.add_argument(
+        "--mlp_early_stop_strategy",
+        choices=["raw_selection_key", "ema_primary"],
+        default="raw_selection_key",
+        help=(
+            "Early-stopping monitor. raw_selection_key preserves the legacy "
+            "checkpoint-key behavior; ema_primary smooths the primary "
+            "validation metric while checkpoint saving still uses the raw "
+            "criterion"
+        ),
+    )
+
+    parser.add_argument(
+        "--mlp_early_stop_min_epochs",
+        type=int,
+        default=0,
+        help=(
+            "Minimum number of MLP epochs to run before an early-stop decision "
+            "is allowed"
+        ),
+    )
+
+    parser.add_argument(
+        "--mlp_early_stop_ema_decay",
+        type=float,
+        default=0.6,
+        help=(
+            "EMA decay for --mlp_early_stop_strategy ema_primary; ignored by "
+            "raw_selection_key"
+        ),
+    )
+
+    parser.add_argument(
+        "--mlp_early_stop_min_delta",
+        type=float,
+        default=0.0,
+        help=(
+            "Minimum increase in the smoothed primary validation metric that "
+            "resets early-stopping patience"
+        ),
     )
 
     parser.add_argument(
         "--modal_interaction",
         type=str,
-        choices=["concat", "concat_attn", "cross_attn_gate", "masked_pretrain"],
+        choices=[
+            "concat",
+            "concat_attn",
+            "cross_attn_gate",
+            "masked_pretrain",
+            "patch_mindts",
+        ],
         default="concat",
         help="How to fuse branch embeddings in the MLP path",
+    )
+
+    parser.add_argument(
+        "--outer_patch_size",
+        type=int,
+        default=64,
+        help=(
+            "Length of the shared temporal patch used by line, Activity Graph, "
+            "and Mantis branches in patch_mindts"
+        ),
+    )
+
+    parser.add_argument(
+        "--outer_patch_stride",
+        type=int,
+        default=64,
+        help="Stride of the shared temporal patch in patch_mindts",
+    )
+
+    parser.add_argument(
+        "--patch_alignment_dim",
+        type=int,
+        default=256,
+        help="Projection width of the within-sample patch alignment objective",
+    )
+
+    parser.add_argument(
+        "--patch_alignment_temperature",
+        type=float,
+        default=0.1,
+        help="Temperature of the within-sample N-by-N patch alignment objective",
+    )
+
+    parser.add_argument(
+        "--patch_alignment_weight",
+        type=float,
+        default=0.1,
+        help="Weight of patch alignment relative to classification loss",
+    )
+
+    parser.add_argument(
+        "--visual_encode_batch_size",
+        type=int,
+        default=16,
+        help=(
+            "Micro-batch size for frozen line/Activity-Graph image encoding in "
+            "patch_mindts"
+        ),
     )
 
     parser.add_argument(
@@ -210,7 +675,16 @@ def parse_args():
     parser.add_argument(
         "--datasets",
         type=str,
-        choices=["ucr", "uea", "uci", "flaap", "falltl", "feng", "aaai27"],
+        choices=[
+            "ucr",
+            "uea",
+            "uci",
+            "flaap",
+            "falltl",
+            "feng",
+            "aaai27",
+            "eeg",
+        ],
         help="Time series classification benchmark",
     )
 
@@ -258,6 +732,26 @@ def parse_args():
             "Explicit clinical endpoint for PADS/Shimmer. Shimmer merges MildPD "
             "and ModeratePD against HC; PADS supports PD-vs-healthy or "
             "PD-vs-other-movement-disorders without collapsing all diagnoses."
+        ),
+    )
+
+    parser.add_argument(
+        "--eeg_protocol",
+        choices=["medformer_code_exact"],
+        default="medformer_code_exact",
+        help=(
+            "Fixed Medformer processed-data subject splits for TDBRAIN, APAVA, "
+            "and ADFTD. TDBRAIN uses the pinned official legacy-50 cohort."
+        ),
+    )
+
+    parser.add_argument(
+        "--eeg_normalization",
+        choices=["per_window_per_channel_standard_scaler_ddof0"],
+        default="per_window_per_channel_standard_scaler_ddof0",
+        help=(
+            "Normalize every one-second EEG window independently, per channel "
+            "over its 256 time points, using population standard deviation."
         ),
     )
 
@@ -328,6 +822,7 @@ def parse_args():
     parser.add_argument(
         "--random_seed",
         type=int,
+        default=42,
         help="Change random seed for experiments",
     )
 
@@ -346,6 +841,16 @@ def parse_args():
         type=float,
         default=0.2,
         help="Test ratio used to split the combined dataset",
+    )
+
+    parser.add_argument(
+        "--falltl_target_length",
+        type=int,
+        default=2048,
+        help=(
+            "Common full-trial length used by FallTL comparison_binary after "
+            "linear resampling; the same value is applied to every split"
+        ),
     )
 
     parser.add_argument(
@@ -385,4 +890,324 @@ def parse_args():
         help="Number of activity line plot sample images to save per dataset",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.med_activity_granularity_bank is None:
+        if args.modal_interaction == "patch_mindts":
+            args.med_activity_granularity_bank = ((4,), (8,), (16,))
+        else:
+            args.med_activity_granularity_bank = (
+                (1, 2, 4),
+                (2, 4, 8),
+                (4, 8, 16),
+            )
+    if args.med_activity_granularity_temperature is None:
+        args.med_activity_granularity_temperature = 1.0
+    if args.med_activity_granularity_entropy_weight is None:
+        args.med_activity_granularity_entropy_weight = (
+            0.01 if args.modal_interaction == "patch_mindts" else 0.001
+        )
+    if args.med_activity_granularity_entropy_floor is None:
+        args.med_activity_granularity_entropy_floor = (
+            0.55 if args.modal_interaction == "patch_mindts" else 0.0
+        )
+    if not 0.0 <= args.med_activity_channel_mix <= 1.0:
+        parser.error("--med_activity_channel_mix must be in [0, 1]")
+    if (
+        not math.isfinite(args.med_activity_router_temperature)
+        or args.med_activity_router_temperature <= 0.0
+    ):
+        parser.error("--med_activity_router_temperature must be positive")
+    if not 0.0 <= args.med_activity_router_mix <= 1.0:
+        parser.error("--med_activity_router_mix must be in [0, 1]")
+    if args.med_activity_granularity_hidden_dim <= 0:
+        parser.error("--med_activity_granularity_hidden_dim must be positive")
+    if (
+        not math.isfinite(args.med_activity_granularity_temperature)
+        or args.med_activity_granularity_temperature <= 0.0
+    ):
+        parser.error("--med_activity_granularity_temperature must be positive")
+    if not 0.0 < args.med_activity_granularity_base_prior < 1.0:
+        parser.error("--med_activity_granularity_base_prior must be in (0, 1)")
+    if (
+        not math.isfinite(args.med_activity_granularity_balance_weight)
+        or args.med_activity_granularity_balance_weight < 0.0
+    ):
+        parser.error(
+            "--med_activity_granularity_balance_weight must be non-negative"
+        )
+    if (
+        not math.isfinite(args.med_activity_granularity_entropy_weight)
+        or args.med_activity_granularity_entropy_weight < 0.0
+    ):
+        parser.error(
+            "--med_activity_granularity_entropy_weight must be non-negative"
+        )
+    for option_name in (
+        "med_activity_granularity_mix_shrinkage_weight",
+        "med_activity_granularity_prior_kl_weight",
+    ):
+        option_value = getattr(args, option_name)
+        if not math.isfinite(option_value) or option_value < 0.0:
+            parser.error(f"--{option_name} must be finite and non-negative")
+    if (
+        not math.isfinite(args.med_activity_granularity_usage_floor)
+        or not 0.0 <= args.med_activity_granularity_usage_floor < 1.0
+    ):
+        parser.error("--med_activity_granularity_usage_floor must be in [0, 1)")
+    if (
+        not math.isfinite(args.med_activity_granularity_usage_ema_decay)
+        or not 0.0 <= args.med_activity_granularity_usage_ema_decay < 1.0
+    ):
+        parser.error(
+            "--med_activity_granularity_usage_ema_decay must be in [0, 1)"
+        )
+    if (
+        not math.isfinite(args.med_activity_granularity_entropy_floor)
+        or not 0.0 <= args.med_activity_granularity_entropy_floor <= 1.0
+    ):
+        parser.error(
+            "--med_activity_granularity_entropy_floor must be in [0, 1]"
+        )
+    if (
+        not math.isfinite(args.med_activity_granularity_entropy_ceiling)
+        or not 0.0 <= args.med_activity_granularity_entropy_ceiling <= 1.0
+    ):
+        parser.error(
+            "--med_activity_granularity_entropy_ceiling must be in [0, 1]"
+        )
+    if (
+        args.med_activity_granularity_entropy_floor
+        > args.med_activity_granularity_entropy_ceiling
+    ):
+        parser.error(
+            "--med_activity_granularity_entropy_floor cannot exceed the ceiling"
+        )
+    for prefix in ("local", "global"):
+        maximum = getattr(args, f"med_activity_granularity_{prefix}_mix_max")
+        initial = getattr(args, f"med_activity_granularity_{prefix}_mix_init")
+        if not math.isfinite(maximum) or not 0.0 < maximum <= 1.0:
+            parser.error(
+                f"--med_activity_granularity_{prefix}_mix_max must be in (0, 1]"
+            )
+        if not math.isfinite(initial) or not 0.0 < initial < maximum:
+            parser.error(
+                f"--med_activity_granularity_{prefix}_mix_init must be in (0, max)"
+            )
+    if (
+        not math.isfinite(
+            args.med_activity_granularity_evidence_half_saturation
+        )
+        or args.med_activity_granularity_evidence_half_saturation <= 0.0
+    ):
+        parser.error(
+            "--med_activity_granularity_evidence_half_saturation must be positive"
+        )
+    if (
+        not math.isfinite(args.med_activity_granularity_minimum_weight)
+        or args.med_activity_granularity_minimum_weight < 0.0
+    ):
+        parser.error(
+            "--med_activity_granularity_minimum_weight must be non-negative"
+        )
+    if (
+        not math.isfinite(args.med_activity_granularity_score_cap)
+        or args.med_activity_granularity_score_cap <= 0.0
+    ):
+        parser.error("--med_activity_granularity_score_cap must be positive")
+    if args.med_activity_granularity_scorer_hidden_dim <= 0:
+        parser.error(
+            "--med_activity_granularity_scorer_hidden_dim must be positive"
+        )
+    if (
+        not math.isfinite(
+            args.med_activity_granularity_confidence_half_saturation
+        )
+        or args.med_activity_granularity_confidence_half_saturation <= 0.0
+    ):
+        parser.error(
+            "--med_activity_granularity_confidence_half_saturation must be positive"
+        )
+    if args.patch_router_top_k <= 0:
+        parser.error("--patch_router_top_k must be positive")
+    if (
+        args.patch_granularity_router_mode == "adaptive_v5"
+        and args.patch_router_top_k > len(args.med_activity_granularity_bank)
+    ):
+        parser.error(
+            "--patch_router_top_k cannot exceed the number of graph experts "
+            "for adaptive_v5"
+        )
+    if (
+        not math.isfinite(args.patch_router_training_noise_std)
+        or args.patch_router_training_noise_std < 0.0
+    ):
+        parser.error(
+            "--patch_router_training_noise_std must be finite and non-negative"
+        )
+    if (
+        not math.isfinite(args.patch_router_local_weight)
+        or not 0.0 <= args.patch_router_local_weight <= 1.0
+    ):
+        parser.error("--patch_router_local_weight must be in [0, 1]")
+    if args.patch_router_relation_hidden_dim <= 0:
+        parser.error("--patch_router_relation_hidden_dim must be positive")
+    for option_name in (
+        "patch_router_relation_residual_scale",
+        "patch_router_key_adapter_scale",
+        "patch_router_value_adapter_scale",
+        "patch_router_route_budget_weight",
+        "patch_router_load_balance_weight",
+    ):
+        option_value = getattr(args, option_name)
+        if not math.isfinite(option_value) or option_value < 0.0:
+            parser.error(f"--{option_name} must be finite and non-negative")
+    if args.mlp_epochs <= 0:
+        parser.error("--mlp_epochs must be positive")
+    if args.mlp_early_stop_patience < 0:
+        parser.error("--mlp_early_stop_patience must be non-negative")
+    if (
+        args.mlp_early_stop_min_epochs < 0
+        or args.mlp_early_stop_min_epochs > args.mlp_epochs
+    ):
+        parser.error("--mlp_early_stop_min_epochs must lie in [0, --mlp_epochs]")
+    if (
+        not math.isfinite(args.mlp_early_stop_ema_decay)
+        or not 0.0 <= args.mlp_early_stop_ema_decay < 1.0
+    ):
+        parser.error("--mlp_early_stop_ema_decay must lie in [0, 1)")
+    if (
+        not math.isfinite(args.mlp_early_stop_min_delta)
+        or args.mlp_early_stop_min_delta < 0.0
+    ):
+        parser.error("--mlp_early_stop_min_delta must be finite and non-negative")
+    if args.pretrain_epochs < 0:
+        parser.error("--pretrain_epochs must be non-negative")
+    if args.outer_patch_size <= 0:
+        parser.error("--outer_patch_size must be positive")
+    if args.outer_patch_stride <= 0:
+        parser.error("--outer_patch_stride must be positive")
+    if args.patch_alignment_dim <= 0:
+        parser.error("--patch_alignment_dim must be positive")
+    if (
+        not math.isfinite(args.patch_alignment_temperature)
+        or args.patch_alignment_temperature <= 0.0
+    ):
+        parser.error("--patch_alignment_temperature must be positive and finite")
+    if (
+        not math.isfinite(args.patch_alignment_weight)
+        or args.patch_alignment_weight < 0.0
+    ):
+        parser.error("--patch_alignment_weight must be finite and non-negative")
+    if args.visual_encode_batch_size <= 0:
+        parser.error("--visual_encode_batch_size must be positive")
+    if args.med_activity_adaptive_granularity:
+        if args.image_mode != "med_activity_graph":
+            parser.error(
+                "--med_activity_adaptive_granularity requires "
+                "--image_mode med_activity_graph"
+            )
+        if args.classifier_type != "mlp":
+            parser.error(
+                "--med_activity_adaptive_granularity requires "
+                "--classifier_type mlp"
+            )
+        if not (args.vit_1_name or args.vit_2_name):
+            parser.error(
+                "--med_activity_adaptive_granularity requires at least one ViT branch"
+            )
+        if (
+            args.modal_interaction != "patch_mindts"
+            and args.med_activity_granularity_bank.count(
+                args.med_activity_patch_lengths
+            )
+            != 1
+        ):
+            parser.error(
+                "--med_activity_granularity_bank must contain "
+                "--med_activity_patch_lengths exactly once"
+            )
+    if args.modal_interaction == "patch_mindts":
+        if args.classifier_type != "mlp":
+            parser.error("--modal_interaction patch_mindts requires --classifier_type mlp")
+        if args.image_mode != "med_activity_graph":
+            parser.error(
+                "--modal_interaction patch_mindts requires "
+                "--image_mode med_activity_graph"
+            )
+        if not args.med_activity_adaptive_granularity:
+            parser.error(
+                "--modal_interaction patch_mindts requires "
+                "--med_activity_adaptive_granularity"
+            )
+        if not args.vit_1_name:
+            parser.error("--modal_interaction patch_mindts requires --vit_1_name")
+        if args.aggregation not in {"mean", "cls_token"}:
+            parser.error(
+                "patch_mindts requires --aggregation mean or --aggregation cls_token"
+            )
+        if args.vit_1_layer is None or (
+            args.vit_1_layer != -1 and args.vit_1_layer <= 0
+        ):
+            parser.error(
+                "patch_mindts requires --vit_1_layer to be a positive integer or -1"
+            )
+        if args.vit_2_name:
+            parser.error(
+                "patch_mindts uses one shared visual encoder; --vit_2_name is not supported"
+            )
+        if not args.mantis:
+            parser.error("--modal_interaction patch_mindts requires --mantis")
+        if args.moment:
+            parser.error("patch_mindts does not use MOMENT in its first implementation")
+        if len(args.med_activity_granularity_bank) != 3:
+            parser.error("patch_mindts requires exactly three Activity Graph regimes")
+        regime_widths = {
+            len(regime) for regime in args.med_activity_granularity_bank
+        }
+        if len(regime_widths) != 1 or not regime_widths.issubset({1, 3}):
+            parser.error(
+                "patch_mindts requires either three single-scale experts or "
+                "three legacy three-scale RGB experts"
+            )
+        if len(set(args.med_activity_granularity_bank)) != 3:
+            parser.error(
+                "patch_mindts Activity Graph experts must be distinct"
+            )
+        if args.med_activity_granularity_usage_floor > 1.0 / len(
+            args.med_activity_granularity_bank
+        ):
+            parser.error(
+                "--med_activity_granularity_usage_floor cannot exceed "
+                "uniform per-expert usage in patch_mindts"
+            )
+        if args.med_activity_granularity_minimum_weight >= 1.0 / len(
+            args.med_activity_granularity_bank
+        ):
+            parser.error(
+                "--med_activity_granularity_minimum_weight must be below "
+                "uniform per-expert usage"
+            )
+        maximum_internal_scale = max(
+            max(regime) for regime in args.med_activity_granularity_bank
+        )
+        if args.outer_patch_size <= maximum_internal_scale:
+            parser.error(
+                "--outer_patch_size must be larger than the largest internal "
+                f"Activity Graph scale ({maximum_internal_scale})"
+            )
+        if args.outer_patch_stride > args.outer_patch_size:
+            parser.error(
+                "--outer_patch_stride cannot exceed --outer_patch_size because "
+                "that would leave time points uncovered"
+            )
+        if args.fusion_dim <= 0:
+            parser.error("--fusion_dim must be positive in patch_mindts")
+        if args.fusion_heads <= 0:
+            parser.error("--fusion_heads must be positive in patch_mindts")
+        if args.fusion_dim % args.fusion_heads != 0:
+            parser.error(
+                "--fusion_dim must be divisible by --fusion_heads in patch_mindts"
+            )
+    if args.falltl_target_length <= 0:
+        parser.error("--falltl_target_length must be positive")
+    return args

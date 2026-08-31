@@ -18,6 +18,11 @@ from transformers import (
     ViTMAEForPreTraining,
 )
 
+from src.medformer_graph import (
+    MedformerGraphRenderer,
+    TemporalGranularityGraphBank,
+)
+
 
 OPENCLIP_LAION_MODELS = {
     "clip-vit-b-32-laion2b-s34b-b79k": ("ViT-B-32", "laion2b_s34b_b79k"),
@@ -25,6 +30,25 @@ OPENCLIP_LAION_MODELS = {
     "clip-vit-l-14-laion2b-s32b-b82k": ("ViT-L-14", "laion2b_s32b_b82k"),
     "clip-vit-h-14-laion2b-s32b-b79k": ("ViT-H-14", "laion2b_s32b_b79k"),
 }
+
+
+def _adaptive_granularity_metadata(base_patch_lengths, granularity_bank):
+    """Resolve legacy-base metadata without rejecting single-scale banks."""
+    if len(granularity_bank) < 2:
+        raise ValueError(
+            "Adaptive granularity requires at least two candidate regimes."
+        )
+    if all(len(regime) == 1 for regime in granularity_bank):
+        return -1, "single_scale_granularity_bank_scale_major_flat_v3"
+    if granularity_bank.count(base_patch_lengths) != 1:
+        raise ValueError(
+            "A legacy/mixed adaptive granularity bank must contain the base "
+            f"regime {base_patch_lengths} exactly once, got {granularity_bank}."
+        )
+    return (
+        granularity_bank.index(base_patch_lengths),
+        "granularity_bank_scale_major_flat_v1",
+    )
 
 
 def get_optimal_order(n):
@@ -303,6 +327,102 @@ def render_multichannel_lineplot(signals, img_size=224, line_width=1.0):
     return canvas
 
 
+def render_stacked_multichannel_lineplot(
+    signals,
+    img_size=224,
+    line_width=1.0,
+):
+    """Render every channel in its own fixed vertical lane on one RGB canvas.
+
+    Each channel is scaled independently using only its finite values.  Invalid
+    values inside a channel are linearly interpolated from the finite samples;
+    an entirely invalid or constant channel is rendered through the centre of
+    its lane.  Channel identity is therefore carried by the lane position and
+    does not depend on a repeating colour palette.
+    """
+    if not isinstance(img_size, (int, np.integer)) or img_size <= 0:
+        raise ValueError(f"img_size must be a positive integer, got {img_size}.")
+    if not np.isfinite(line_width) or line_width <= 0.0:
+        raise ValueError(f"line_width must be finite and positive, got {line_width}.")
+
+    if torch.is_tensor(signals):
+        signals = signals.detach().to(device="cpu", dtype=torch.float32).numpy()
+    signals = np.asarray(signals, dtype=np.float32)
+    if signals.ndim != 2:
+        raise ValueError(f"signals must have shape (n, T), got {signals.shape}.")
+
+    num_channels, time_steps = signals.shape
+    if num_channels == 0 or time_steps == 0:
+        raise ValueError(
+            "signals must contain at least one channel and one time step, "
+            f"got {signals.shape}."
+        )
+    if num_channels > img_size:
+        raise ValueError(
+            "A fixed vertical lane requires at least one image row per channel; "
+            f"got {num_channels} channels for img_size={img_size}."
+        )
+
+    canvas = np.ones((3, img_size, img_size), dtype=np.float32)
+    lane_edges = np.linspace(
+        0,
+        img_size,
+        num=num_channels + 1,
+        dtype=np.int64,
+    )
+    sample_positions = np.arange(time_steps, dtype=np.float32)
+
+    for channel_idx, signal in enumerate(signals):
+        finite = np.isfinite(signal)
+        if not finite.any():
+            safe_signal = np.zeros(time_steps, dtype=np.float32)
+            value_min = value_max = 0.0
+        else:
+            valid_positions = sample_positions[finite]
+            valid_values = signal[finite]
+            value_min = float(valid_values.min())
+            value_max = float(valid_values.max())
+            if finite.all():
+                safe_signal = signal
+            elif valid_values.size == 1:
+                safe_signal = np.full(
+                    time_steps,
+                    valid_values[0],
+                    dtype=np.float32,
+                )
+            else:
+                safe_signal = np.interp(
+                    sample_positions,
+                    valid_positions,
+                    valid_values,
+                ).astype(np.float32)
+
+        lane_start = int(lane_edges[channel_idx])
+        lane_end = int(lane_edges[channel_idx + 1])
+        lane_height = lane_end - lane_start
+        lane_mask = np.ones((img_size, img_size), dtype=np.float32)
+        _draw_waveform(
+            canvas=lane_mask,
+            signal=safe_signal,
+            x0=0,
+            y0=lane_start,
+            width=img_size,
+            height=lane_height,
+            value_min=value_min,
+            value_max=value_max,
+            line_width=line_width,
+        )
+        line_pixels = lane_mask < 0.5
+        canvas[:, line_pixels] = 0.0
+
+    return np.nan_to_num(
+        canvas,
+        nan=1.0,
+        posinf=1.0,
+        neginf=0.0,
+    ).clip(0.0, 1.0)
+
+
 def preprocess_multichannel_lineplot(signals, img_size=224):
     """Render a batch of multichannel samples as ordinary RGB line plots."""
     device = signals.device if torch.is_tensor(signals) else None
@@ -336,6 +456,43 @@ def preprocess_multichannel_lineplot(signals, img_size=224):
         image_tensor = image_tensor.to(device=device, dtype=dtype)
 
     return image_tensor
+
+
+def preprocess_stacked_multichannel_lineplot(signals, img_size=224):
+    """Render ``(channels, time)`` or ``(batch, channels, time)`` as lanes."""
+    device = signals.device if torch.is_tensor(signals) else None
+    if torch.is_tensor(signals) and signals.is_floating_point():
+        output_dtype = signals.dtype
+    else:
+        output_dtype = torch.float32
+
+    if torch.is_tensor(signals):
+        signals_np = (
+            signals.detach().to(device="cpu", dtype=torch.float32).numpy()
+        )
+    else:
+        signals_np = np.asarray(signals)
+
+    if signals_np.ndim == 2:
+        signals_np = signals_np[None, ...]
+    elif signals_np.ndim != 3:
+        raise ValueError(
+            "signals must have shape (n, T) or (B, n, T), "
+            f"got {signals_np.shape}."
+        )
+    if signals_np.shape[0] == 0:
+        raise ValueError("signals batch dimension must be non-empty.")
+
+    images = [
+        render_stacked_multichannel_lineplot(sample, img_size=img_size)
+        for sample in signals_np
+    ]
+    image_tensor = torch.from_numpy(np.stack(images, axis=0))
+    image_tensor = image_tensor.to(dtype=output_dtype)
+    if device is not None:
+        image_tensor = image_tensor.to(device=device)
+
+    return image_tensor.clamp(0.0, 1.0)
 
 
 def get_openclip_config(model_name):
@@ -416,6 +573,12 @@ def get_neurosigvit(
     stride,
     patch_size,
     image_mode="line_plot",
+    med_activity_patch_lengths=(2, 4, 8),
+    med_activity_channel_mix=0.35,
+    med_activity_router_temperature=0.2,
+    med_activity_router_mix=0.5,
+    med_activity_adaptive_granularity=False,
+    med_activity_granularity_bank=((1, 2, 4), (2, 4, 8), (4, 8, 16)),
 ):
     processor, vit = get_processor_vit(model_name)
 
@@ -437,6 +600,54 @@ def get_neurosigvit(
         stride=stride,
         image_mode=image_mode,
     )
+    neurosigvit.med_activity_graph = MedformerGraphRenderer(
+        patch_lengths=med_activity_patch_lengths,
+        channel_mix=med_activity_channel_mix,
+        router_temperature=med_activity_router_temperature,
+        router_mix=med_activity_router_mix,
+    )
+
+    base_patch_lengths = tuple(int(length) for length in med_activity_patch_lengths)
+    granularity_bank = tuple(
+        tuple(int(length) for length in regime)
+        for regime in med_activity_granularity_bank
+    )
+    neurosigvit.adaptive_granularity_enabled = bool(
+        med_activity_adaptive_granularity
+    )
+    neurosigvit.feature_granularity_count = 1
+    neurosigvit.feature_granularity_labels = (
+        "-".join(str(length) for length in base_patch_lengths),
+    )
+    neurosigvit.feature_granularity_base_index = 0
+    neurosigvit.feature_layout = "single_embedding_v1"
+    neurosigvit.med_activity_granularity_bank = None
+
+    if neurosigvit.adaptive_granularity_enabled:
+        if image_mode != "med_activity_graph":
+            raise ValueError(
+                "Adaptive granularity is only available with "
+                "image_mode='med_activity_graph'."
+            )
+        base_index, feature_layout = _adaptive_granularity_metadata(
+            base_patch_lengths,
+            granularity_bank,
+        )
+        neurosigvit.med_activity_granularity_bank = (
+            TemporalGranularityGraphBank(
+                patch_length_bank=granularity_bank,
+                channel_mix=med_activity_channel_mix,
+                router_temperature=med_activity_router_temperature,
+                router_mix=med_activity_router_mix,
+            )
+        )
+        neurosigvit.feature_granularity_count = len(granularity_bank)
+        neurosigvit.feature_granularity_labels = tuple(
+            "-".join(str(length) for length in regime)
+            for regime in granularity_bank
+        )
+        neurosigvit.feature_granularity_base_index = base_index
+        neurosigvit.feature_layout = feature_layout
 
     return neurosigvit
 
@@ -469,6 +680,8 @@ class BaseNeuroSigViT(nn.Module, ABC):
     def forward(self, inputs):
         if self.image_mode == "activity_graph":
             inputs = preprocess_graph(inputs, mode="multicolumn", render="waveform")
+        elif self.image_mode == "med_activity_graph":
+            inputs = self.med_activity_graph(inputs)
         elif self.image_mode == "multichannel_line_plot":
             inputs = preprocess_multichannel_lineplot(inputs)
         elif self.image_mode == "activity_matrix":
@@ -487,6 +700,40 @@ class BaseNeuroSigViT(nn.Module, ABC):
         return self.aggregate_hidden_representations(
             hidden, aggregation=self.aggregation
         )
+
+    def forward_granularities(self, inputs):
+        """Extract one frozen vision embedding per granularity-bank regime.
+
+        Candidates are encoded sequentially rather than as a ``batch * K``
+        tensor so the peak memory of large ViTs stays close to the legacy
+        single-graph path.  The returned layout is ``(batch, regimes, dim)``.
+        """
+        if self.image_mode != "med_activity_graph":
+            raise ValueError(
+                "Granularity-bank extraction requires med_activity_graph mode."
+            )
+        if not getattr(self, "adaptive_granularity_enabled", False):
+            raise ValueError("Adaptive granularity is not enabled for this model.")
+        bank = getattr(self, "med_activity_granularity_bank", None)
+        if bank is None:
+            raise RuntimeError("Adaptive granularity bank is not initialized.")
+
+        graph_candidates = bank(inputs)
+        candidate_embeddings = []
+        for candidate_index in range(graph_candidates.shape[1]):
+            hidden = self.forward_vit(graph_candidates[:, candidate_index])
+            embedding = self.aggregate_hidden_representations(
+                hidden,
+                aggregation=self.aggregation,
+            )
+            if embedding.ndim != 2:
+                raise ValueError(
+                    "Adaptive granularity expects one vector per sample and "
+                    f"regime, got {tuple(embedding.shape)}."
+                )
+            candidate_embeddings.append(embedding)
+
+        return torch.stack(candidate_embeddings, dim=1)
 
     def aggregate_hidden_representations(self, hidden_states, aggregation):
         if aggregation == "mean":
@@ -640,7 +887,10 @@ class NeuroSigViT_HF(BaseNeuroSigViT):
 
     def forward_vit(self, inputs):
         device = inputs.device
-        inputs = [self.to_pil(im) for im in inputs]
+        # ToPILImage cannot convert CUDA tensors through NumPy.  Renderers may
+        # operate on the model device, so make the host transfer explicit and
+        # move only the processor output back to the encoder device.
+        inputs = [self.to_pil(im.detach().cpu()) for im in inputs]
         inputs = self.processor(images=inputs, return_tensors="pt").to(device)
         outputs = self.vit(
             **inputs,

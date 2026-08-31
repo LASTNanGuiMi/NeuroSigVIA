@@ -13,6 +13,7 @@ def embed(model, dataloader, model_type, channels, device):
         if model_type == "neurosigvit" and getattr(model, "image_mode", None) in {
             "multichannel_line_plot",
             "activity_graph",
+            "med_activity_graph",
             "activity_matrix",
         }:
             with torch.no_grad():
@@ -54,7 +55,10 @@ def embed(model, dataloader, model_type, channels, device):
         batch_embeds.append(np.concatenate(batch_embeds_dim, axis=1))
 
     embeds = np.concatenate(batch_embeds)
-    embeds /= np.linalg.norm(embeds, axis=-1, keepdims=True)
+    norms = np.linalg.norm(embeds, axis=-1, keepdims=True)
+    embeds = embeds / np.maximum(norms, 1e-12)
+    if not np.isfinite(embeds).all():
+        raise ValueError(f"{model_type} produced non-finite normalized embeddings.")
 
     return embeds
 

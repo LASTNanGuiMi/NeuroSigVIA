@@ -45,6 +45,10 @@ def _nearest_centroid_scores(clf, X):
     return -distances
 
 
+def _final_estimator(clf):
+    return clf[-1] if hasattr(clf, "steps") else clf
+
+
 def get_class_scores(clf, X):
     if hasattr(clf, "predict_proba"):
         return clf.predict_proba(X)
@@ -55,11 +59,11 @@ def get_class_scores(clf, X):
             scores = scores[:, None]
         return scores
 
-    if isinstance(clf[-1], NearestCentroid):
+    if isinstance(_final_estimator(clf), NearestCentroid):
         return _nearest_centroid_scores(clf, X)
 
     raise ValueError(
-        f"Classifier {type(clf[-1]).__name__} does not provide class scores."
+        f"Classifier {type(_final_estimator(clf)).__name__} does not provide class scores."
     )
 
 
@@ -102,7 +106,7 @@ def compute_metrics_from_predictions(y_true, y_pred, y_score, classes):
 def compute_metrics(clf, X, y):
     y_true = y.ravel()
     y_pred = clf.predict(X)
-    classes = clf[-1].classes_
+    classes = clf.classes_
     y_score = get_class_scores(clf, X)
 
     return compute_metrics_from_predictions(y_true, y_pred, y_score, classes)

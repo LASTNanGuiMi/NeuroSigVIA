@@ -9,6 +9,10 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision.utils import save_image
 
+from src.medformer_graph import (
+    MedformerGraphRenderer,
+    TemporalGranularityGraphBank,
+)
 from src.neurosigvit import preprocess_graph
 
 
@@ -132,16 +136,66 @@ def write_result_table(
     return
 
 
-def save_activity_graph_samples(result_dir, dataset, dataloader, num_samples):
+def save_activity_graph_samples(
+    result_dir,
+    dataset,
+    dataloader,
+    num_samples,
+    image_mode="activity_graph",
+    med_activity_patch_lengths=(2, 4, 8),
+    med_activity_channel_mix=0.35,
+    med_activity_router_temperature=0.2,
+    med_activity_router_mix=0.5,
+    med_activity_adaptive_granularity=False,
+    med_activity_granularity_bank=((1, 2, 4), (2, 4, 8), (4, 8, 16)),
+):
     if num_samples <= 0:
         return
 
-    sample_dir = os.path.join(result_dir, "activity_graph_samples")
+    if image_mode == "activity_graph":
+        transform = lambda batch: preprocess_graph(
+            batch, mode="multicolumn", render="waveform"
+        )
+    elif image_mode == "med_activity_graph":
+        if med_activity_adaptive_granularity:
+            transform = TemporalGranularityGraphBank(
+                patch_length_bank=med_activity_granularity_bank,
+                channel_mix=med_activity_channel_mix,
+                router_temperature=med_activity_router_temperature,
+                router_mix=med_activity_router_mix,
+            )
+        else:
+            transform = MedformerGraphRenderer(
+                patch_lengths=med_activity_patch_lengths,
+                channel_mix=med_activity_channel_mix,
+                router_temperature=med_activity_router_temperature,
+                router_mix=med_activity_router_mix,
+            )
+    else:
+        raise ValueError(f"Unsupported activity graph image mode {image_mode}.")
+
+    sample_dir = os.path.join(result_dir, f"{image_mode}_samples")
     os.makedirs(sample_dir, exist_ok=True)
 
     saved = 0
     for (batch,) in dataloader:
-        graph_images = preprocess_graph(batch, mode="multicolumn", render="waveform")
+        graph_images = transform(batch)
+        if graph_images.ndim == 5:
+            regime_labels = [
+                "-".join(str(length) for length in regime)
+                for regime in med_activity_granularity_bank
+            ]
+            for candidate_images in graph_images:
+                if saved >= num_samples:
+                    return
+                for regime_label, image in zip(regime_labels, candidate_images):
+                    filename = os.path.join(
+                        sample_dir,
+                        f"{dataset}_sample{saved}_granularity{regime_label}.png",
+                    )
+                    save_image(image, filename)
+                saved += 1
+            continue
         for image in graph_images:
             if saved >= num_samples:
                 return

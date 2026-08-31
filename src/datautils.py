@@ -26,6 +26,23 @@ FALLTL_FEATURE_COLUMNS = [
     "EulerZ",
 ]
 
+FALLTL_BODY_PART_CODES = (
+    "FC",  # Front chest
+    "BW",  # Back waist
+    "LW",  # Left forearm
+    "RW",  # Right forearm
+    "LT",  # Left thigh
+    "RT",  # Right thigh
+    "LA",  # Left shank
+    "RA",  # Right shank
+)
+FALLTL_COMPARISON_FILENAME_RE = re.compile(
+    r"^(?P<activity>D\d{2}|F\d{2}[FBL][RW])_"
+    r"(?P<body>FC|BW|LW|RW|LT|RT|LA|RA)_"
+    r"(?P<trial>\d+)\.csv$",
+    flags=re.IGNORECASE,
+)
+
 FENG_PREFERRED_SENSORS = [
     "LowerBack",
     "RightThigh",
@@ -124,6 +141,90 @@ AAAI27_REFERENCE_DATASETS_SHA256 = (
 _AAAI27_MODULE_CACHE = {}
 
 
+EEG_MEDFORMER_DATASET_NAMES = ("TDBRAIN", "APAVA", "ADFTD")
+EEG_MEDFORMER_NORMALIZATION = "per_window_per_channel_standard_scaler_ddof0"
+EEG_MEDFORMER_SPECS = {
+    "APAVA": {
+        "channels": 16,
+        "subject_count": 23,
+        "class_names": {0: "healthy", 1: "alzheimers"},
+        "label_sha256": (
+            "57d98d5207e300999428ed0951f54bb4ef29f9ab67a547feedd07d35ed6da1f7"
+        ),
+        "content_sha256": (
+            "96984c06c5d5d41e62b2dc751733c78f67002e990f6c7dc421f155b32dfaf0d6"
+        ),
+        "protocol": "medformer_code_exact_apava_subject_split",
+        "split_ids": {
+            "train": tuple(range(3, 15)) + (21, 22, 23),
+            "vali": (15, 16, 19, 20),
+            "test": (1, 2, 17, 18),
+        },
+        "expected_subject_counts": {"train": 15, "vali": 4, "test": 4},
+        "expected_window_counts": {"train": 3123, "vali": 1413, "test": 1431},
+    },
+    "ADFTD": {
+        "channels": 19,
+        "subject_count": 88,
+        "class_names": {
+            0: "healthy",
+            1: "frontotemporal_dementia",
+            2: "alzheimers",
+        },
+        "label_sha256": (
+            "3b0be092cd886c0315c38120f3d244fa16f515e83608f30569e1a0ff508e4922"
+        ),
+        "content_sha256": (
+            "46d083120f3c07a69628efa140ac31053da796d16871aaab1c813d86506f86f8"
+        ),
+        "protocol": "medformer_code_exact_label_row_order_60_20_20",
+        "split_ids": {
+            "train": (
+                tuple(range(37, 54))
+                + tuple(range(66, 79))
+                + tuple(range(1, 22))
+            ),
+            "vali": (
+                tuple(range(54, 60))
+                + tuple(range(79, 84))
+                + tuple(range(22, 29))
+            ),
+            "test": (
+                tuple(range(60, 66))
+                + tuple(range(84, 89))
+                + tuple(range(29, 37))
+            ),
+        },
+        "expected_subject_counts": {"train": 51, "vali": 18, "test": 19},
+        "expected_window_counts": {
+            "train": 40446,
+            "vali": 14658,
+            "test": 14648,
+        },
+    },
+    "TDBRAIN": {
+        "channels": 33,
+        "subject_count": 72,
+        "class_names": {0: "healthy", 1: "parkinsons_disease"},
+        "label_sha256": (
+            "12a23405ff73b720bc5075767d63c7e00b8a8e9d18fb9972407d10b025d1e069"
+        ),
+        "content_sha256": (
+            "3ae88137c1bc4869ee4e5c265a409c0405932f3fec9e76d04aeca3538d7e3652"
+        ),
+        "protocol": "medformer_code_exact_official_legacy50_only",
+        "split_ids": {
+            "train": tuple(range(1, 18)) + tuple(range(29, 46)),
+            "vali": (18, 19, 20, 21, 46, 47, 48, 49),
+            "test": (22, 23, 24, 25, 50, 51, 52, 53),
+        },
+        "expected_subject_counts": {"train": 34, "vali": 8, "test": 8},
+        "expected_window_counts": {"train": 4320, "vali": 960, "test": 960},
+        "expected_excluded_ids": (26, 27, 28) + tuple(range(54, 73)),
+    },
+}
+
+
 @dataclass
 class AAAI27DataBundle:
     dataset_name: str
@@ -142,6 +243,38 @@ class AAAI27DataBundle:
     label_mapping: dict[int, int] | None = None
 
 
+@dataclass(frozen=True)
+class EEGMedformerSubjectRecord:
+    subject_id: int
+    label: int
+    feature_path: Path
+    window_count: int
+
+
+@dataclass(frozen=True)
+class EEGMedformerInventory:
+    dataset_name: str
+    data_root: Path
+    records: tuple[EEGMedformerSubjectRecord, ...]
+    split_ids: dict[str, tuple[int, ...]]
+    excluded_ids: tuple[int, ...]
+    protocol: str
+    label_sha256: str
+    content_sha256: str
+
+
+@dataclass
+class EEGMedformerBundle:
+    inventory: EEGMedformerInventory
+    train_loader: DataLoader
+    train_labels: np.ndarray
+    vali_loader: DataLoader
+    vali_labels: np.ndarray
+    test_loader: DataLoader
+    test_labels: np.ndarray
+    normalization: str = EEG_MEDFORMER_NORMALIZATION
+
+
 @dataclass
 class FallTLComparisonBundle:
     train_loader: DataLoader
@@ -153,6 +286,10 @@ class FallTLComparisonBundle:
     train_files: list[str]
     vali_files: list[str]
     test_files: list[str]
+    train_group_ids: list[tuple[str, int]]
+    vali_group_ids: list[tuple[str, int]]
+    test_group_ids: list[tuple[str, int]]
+    target_length: int
 
 
 @dataclass
@@ -361,6 +498,18 @@ def get_uci_har_official_dataloaders(args):
     )
     _, test_loader = _make_tensor_loaders(
         train_data, test_data, args.batch_size
+    )
+    # Keep subject metadata on the CPU dataset object.  The raw training batch
+    # intentionally remains a one-tensor tuple because downstream feature
+    # extractors interpret additional tensors as sequence lengths.
+    train_loader.dataset.sample_subject_ids = np.asarray(
+        official_train_subjects[train_mask], dtype=np.int64
+    )
+    vali_loader.dataset.sample_subject_ids = np.asarray(
+        official_train_subjects[vali_mask], dtype=np.int64
+    )
+    test_loader.dataset.sample_subject_ids = np.asarray(
+        test_sample_subjects, dtype=np.int64
     )
     bundle = UCIHARSubjectBundle(
         train_loader=train_loader,
@@ -707,8 +856,27 @@ def _natural_path_key(path):
     ]
 
 
+def _parse_falltl_comparison_filename(filename):
+    basename = os.path.basename(os.fspath(filename))
+    match = FALLTL_COMPARISON_FILENAME_RE.fullmatch(basename)
+    if match is None:
+        raise ValueError(
+            f"Invalid FallTL comparison filename {basename!r}. Expected "
+            "<Dxx|Fxx[direction][ending]>_<body_part_code>_<trial_no>.csv, "
+            "where direction is F/B/L, ending is R/W, and body_part_code is "
+            f"one of {FALLTL_BODY_PART_CODES}."
+        )
+
+    activity_code = match.group("activity").upper()
+    body_part_code = match.group("body").upper()
+    trial_no = int(match.group("trial"))
+    return activity_code, body_part_code, trial_no
+
+
 def _interpolate_falltl_sequence(values, source_file):
     values = np.asarray(values, dtype=np.float32)
+    if values.ndim != 2 or values.shape[0] == 0:
+        raise ValueError(f"FallTL file {source_file} has no data rows.")
     positions = np.arange(len(values), dtype=np.float32)
     interpolated = values.copy()
     for channel in range(values.shape[1]):
@@ -725,23 +893,65 @@ def _interpolate_falltl_sequence(values, source_file):
     return interpolated
 
 
-def _standardize_and_pad_falltl(train_sequences, *other_splits):
-    train_points = np.concatenate(train_sequences, axis=0)
+def _validate_falltl_target_length(target_length):
+    if (
+        isinstance(target_length, bool)
+        or not isinstance(target_length, (int, np.integer))
+        or target_length <= 0
+    ):
+        raise ValueError(
+            "falltl_target_length must be a positive integer, "
+            f"got {target_length!r}."
+        )
+    return int(target_length)
+
+
+def _resample_falltl_sequence(sequence, target_length):
+    source_length, channels = sequence.shape
+    source_positions = np.linspace(0.0, 1.0, source_length, dtype=np.float64)
+    target_positions = np.linspace(0.0, 1.0, target_length, dtype=np.float64)
+    resampled = np.empty((channels, target_length), dtype=np.float32)
+    for channel in range(channels):
+        resampled[channel] = np.interp(
+            target_positions,
+            source_positions,
+            sequence[:, channel],
+        ).astype(np.float32)
+    return resampled
+
+
+def _standardize_and_resample_falltl(
+    train_sequences, *other_splits, target_length
+):
+    target_length = _validate_falltl_target_length(target_length)
+    if not train_sequences:
+        raise ValueError("FallTL training split is empty.")
+
+    # Fit channel statistics to every original training point before temporal
+    # resampling. Validation and test points never influence these statistics.
+    train_points = np.concatenate(train_sequences, axis=0).astype(
+        np.float64, copy=False
+    )
     mean = train_points.mean(axis=0, keepdims=True)
     std = train_points.std(axis=0, keepdims=True)
     std = np.where(std < 1e-8, 1.0, std)
 
-    padded_splits = []
+    resampled_splits = []
     for sequences in (train_sequences, *other_splits):
-        max_length = max(len(sequence) for sequence in sequences)
-        padded = np.zeros(
-            (len(sequences), train_points.shape[1], max_length), dtype=np.float32
+        if not sequences:
+            raise ValueError("FallTL comparison split is empty.")
+        resampled = np.stack(
+            [
+                _resample_falltl_sequence(
+                    (sequence.astype(np.float64, copy=False) - mean) / std,
+                    target_length,
+                )
+                for sequence in sequences
+            ],
+            axis=0,
         )
-        for index, sequence in enumerate(sequences):
-            standardized = ((sequence - mean) / std).astype(np.float32)
-            padded[index, :, : len(sequence)] = standardized.T
-        padded_splits.append(padded)
-    return tuple(padded_splits)
+        resampled_splits.append(resampled.astype(np.float32, copy=False))
+    return tuple(resampled_splits)
 
 
 def _load_falltl_comparison_arrays(data_dir):
@@ -749,36 +959,46 @@ def _load_falltl_comparison_arrays(data_dir):
     csv_files = sorted(
         _glob_csv_files(falltl_dir, "*.csv"), key=_natural_path_key
     )
-    source_files = np.asarray([os.path.basename(path) for path in csv_files])
-    labels = np.asarray(
-        [1 if filename.startswith("F") else 0 for filename in source_files],
-        dtype=np.int64,
-    )
     sequences = []
-    valid_labels = []
-    valid_files = []
-    for csv_file, label, source_file in zip(csv_files, labels, source_files):
-        values = np.genfromtxt(
-            csv_file,
-            delimiter=",",
-            skip_header=1,
-            usecols=range(9),
-            dtype=np.float32,
+    labels = []
+    source_files = []
+    seen_basenames = {}
+    for csv_file in csv_files:
+        source_file = os.path.basename(csv_file)
+        activity_code, body_part_code, trial_no = (
+            _parse_falltl_comparison_filename(source_file)
         )
-        if values.ndim == 1:
-            values = values.reshape(1, -1)
-        if len(values) == 0:
-            continue
+
+        normalized_basename = (
+            f"{activity_code}_{body_part_code}_{trial_no}.csv".casefold()
+        )
+        if normalized_basename in seen_basenames:
+            raise ValueError(
+                "Duplicate FallTL comparison basename after case/trial "
+                f"normalization: {seen_basenames[normalized_basename]!r} and "
+                f"{source_file!r}."
+            )
+        seen_basenames[normalized_basename] = source_file
+
+        df = _read_csv(csv_file)
+        _check_columns(df, FALLTL_FEATURE_COLUMNS, csv_file)
+        import pandas as pd
+
+        values = (
+            df.loc[:, FALLTL_FEATURE_COLUMNS]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=np.float32)
+        )
         sequences.append(_interpolate_falltl_sequence(values, source_file))
-        valid_labels.append(label)
-        valid_files.append(source_file)
+        labels.append(1 if activity_code.startswith("F") else 0)
+        source_files.append(source_file)
 
     if not sequences:
         raise FileNotFoundError(f"No FallTL CSV files found below {data_dir}")
     return (
         sequences,
-        np.asarray(valid_labels, dtype=np.int64),
-        np.asarray(valid_files),
+        np.asarray(labels, dtype=np.int64),
+        np.asarray(source_files),
     )
 
 
@@ -786,24 +1006,78 @@ def get_falltl_comparison_dataloaders(args):
     from sklearn.model_selection import train_test_split
 
     sequences, labels, source_files = _load_falltl_comparison_arrays(args.data_dir)
-    all_indices = np.arange(len(labels))
-    train_indices, remainder_indices = train_test_split(
-        all_indices,
-        test_size=0.4,
-        random_state=42,
-        stratify=labels,
-    )
-    vali_indices, test_indices = train_test_split(
-        remainder_indices,
-        test_size=0.5,
-        random_state=42,
-        stratify=labels[remainder_indices],
+    target_length = _validate_falltl_target_length(
+        getattr(args, "falltl_target_length", 2048)
     )
 
-    train_data, vali_data, test_data = _standardize_and_pad_falltl(
+    metadata = []
+    for source_file in source_files:
+        activity_code, body_part_code, trial_no = (
+            _parse_falltl_comparison_filename(source_file)
+        )
+        metadata.append(
+            (activity_code, body_part_code, trial_no, (activity_code, trial_no))
+        )
+    file_group_ids = [item[3] for item in metadata]
+    group_to_label = {}
+    for group_id, label in zip(file_group_ids, labels):
+        label = int(label)
+        existing_label = group_to_label.setdefault(group_id, label)
+        if existing_label != label:
+            raise ValueError(
+                f"FallTL event group {group_id!r} contains conflicting labels."
+            )
+
+    unique_groups = sorted(group_to_label)
+    group_labels = np.asarray(
+        [group_to_label[group_id] for group_id in unique_groups], dtype=np.int64
+    )
+    group_indices = np.arange(len(unique_groups))
+    try:
+        train_group_indices, remainder_group_indices = train_test_split(
+            group_indices,
+            test_size=0.4,
+            random_state=42,
+            stratify=group_labels,
+        )
+        vali_group_indices, test_group_indices = train_test_split(
+            remainder_group_indices,
+            test_size=0.5,
+            random_state=42,
+            stratify=group_labels[remainder_group_indices],
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "FallTL comparison_binary requires enough unique D/F event groups "
+            "for a label-stratified 60/20/20 split."
+        ) from exc
+
+    train_groups = {unique_groups[index] for index in train_group_indices}
+    vali_groups = {unique_groups[index] for index in vali_group_indices}
+    test_groups = {unique_groups[index] for index in test_group_indices}
+    assert train_groups.isdisjoint(vali_groups)
+    assert train_groups.isdisjoint(test_groups)
+    assert vali_groups.isdisjoint(test_groups)
+
+    def expand_groups(groups):
+        return np.asarray(
+            [
+                index
+                for index, group_id in enumerate(file_group_ids)
+                if group_id in groups
+            ],
+            dtype=np.int64,
+        )
+
+    train_indices = expand_groups(train_groups)
+    vali_indices = expand_groups(vali_groups)
+    test_indices = expand_groups(test_groups)
+
+    train_data, vali_data, test_data = _standardize_and_resample_falltl(
         [sequences[index] for index in train_indices],
         [sequences[index] for index in vali_indices],
         [sequences[index] for index in test_indices],
+        target_length=target_length,
     )
     train_loader, vali_loader = _make_tensor_loaders(
         train_data, vali_data, args.batch_size
@@ -821,6 +1095,10 @@ def get_falltl_comparison_dataloaders(args):
         train_files=source_files[train_indices].tolist(),
         vali_files=source_files[vali_indices].tolist(),
         test_files=source_files[test_indices].tolist(),
+        train_group_ids=sorted(train_groups),
+        vali_group_ids=sorted(vali_groups),
+        test_group_ids=sorted(test_groups),
+        target_length=target_length,
     )
     distributions = []
     for split, split_labels in (
@@ -837,8 +1115,11 @@ def get_falltl_comparison_dataloaders(args):
         )
     print(
         "FallTL comparison_binary: one_sequence_per_csv; labels=D:0/F:1; "
-        f"padded_lengths=train:{train_data.shape[2]}/vali:{vali_data.shape[2]}"
-        f"/test:{test_data.shape[2]}; split_seed=42; " + "; ".join(distributions)
+        f"resampled_length={target_length}; "
+        "group_split=(activity_code,trial_no), stratified=60/20/20, seed=42; "
+        f"groups=train:{len(train_groups)}/vali:{len(vali_groups)}"
+        f"/test:{len(test_groups)}; group_overlap=0/0/0; "
+        + "; ".join(distributions)
     )
     return bundle
 
@@ -853,13 +1134,34 @@ def write_falltl_comparison_split_audit(bundle, result_dir):
         ("vali", bundle.vali_files, bundle.vali_labels),
         ("test", bundle.test_files, bundle.test_labels),
     ):
-        rows.extend(
-            (filename, int(label), split)
-            for filename, label in zip(files, labels)
-        )
-    with output_path.open("w", newline="") as handle:
+        for filename, label in zip(files, labels):
+            activity_code, body_part_code, trial_no = (
+                _parse_falltl_comparison_filename(filename)
+            )
+            rows.append(
+                (
+                    filename,
+                    int(label),
+                    activity_code,
+                    body_part_code,
+                    trial_no,
+                    f"{activity_code}_{trial_no}",
+                    split,
+                )
+            )
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["filename", "label_id", "split"])
+        writer.writerow(
+            [
+                "filename",
+                "label_id",
+                "activity_code",
+                "body_part_code",
+                "trial_no",
+                "event_group",
+                "split",
+            ]
+        )
         writer.writerows(sorted(rows))
     return output_path
 
@@ -966,6 +1268,341 @@ def _make_tensor_loaders(train_data, test_data, batch_size):
     )
 
     return train_loader, test_loader
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _eeg_medformer_content_sha256(data_root):
+    """Match `sha256sum Feature/*.npy Label/label.npy | sha256sum`."""
+    data_root = Path(data_root)
+    paths = sorted(
+        (data_root / "Feature").glob("feature_*.npy"), key=lambda path: path.name
+    )
+    paths.append(data_root / "Label" / "label.npy")
+    lines = "".join(
+        f"{_sha256_file(path)}  {path.relative_to(data_root).as_posix()}\n"
+        for path in paths
+    )
+    return hashlib.sha256(lines.encode("utf-8")).hexdigest()
+
+
+def find_eeg_medformer_data_root(data_dir, dataset_name):
+    dataset_name = str(dataset_name).upper()
+    if dataset_name not in EEG_MEDFORMER_DATASET_NAMES:
+        raise ValueError(f"Unsupported Medformer EEG dataset: {dataset_name}")
+
+    base = Path(data_dir).expanduser()
+    candidates = (
+        base,
+        base / dataset_name,
+        base / "processed" / dataset_name,
+    )
+    seen = set()
+    for candidate in candidates:
+        normalized = candidate.resolve()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if (
+            (normalized / "Feature").is_dir()
+            and (normalized / "Label" / "label.npy").is_file()
+        ):
+            return normalized
+    raise FileNotFoundError(
+        f"Could not find processed Medformer dataset {dataset_name} below "
+        f"{data_dir!r}. Expected Feature/feature_*.npy and Label/label.npy."
+    )
+
+
+def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
+    dataset_name = str(dataset_name).upper()
+    if dataset_name not in EEG_MEDFORMER_SPECS:
+        raise ValueError(f"Unsupported Medformer EEG dataset: {dataset_name}")
+    spec = EEG_MEDFORMER_SPECS[dataset_name]
+    data_root = find_eeg_medformer_data_root(data_dir, dataset_name)
+    label_path = data_root / "Label" / "label.npy"
+
+    label_sha256 = _sha256_file(label_path)
+    if label_sha256 != spec["label_sha256"]:
+        raise ValueError(
+            f"{dataset_name} label SHA-256 mismatch: {label_sha256}; "
+            f"expected {spec['label_sha256']}"
+        )
+
+    labels = np.load(label_path, allow_pickle=False)
+    if labels.ndim != 2 or labels.shape != (spec["subject_count"], 2):
+        raise ValueError(
+            f"Expected {dataset_name} labels with shape "
+            f"({spec['subject_count']}, 2), got {labels.shape}."
+        )
+
+    label_by_id = {}
+    for raw_label, raw_subject_id in labels.tolist():
+        if not float(raw_label).is_integer() or not float(raw_subject_id).is_integer():
+            raise ValueError(
+                f"{dataset_name} label rows must contain integer-valued IDs."
+            )
+        label = int(raw_label)
+        subject_id = int(raw_subject_id)
+        if label not in spec["class_names"]:
+            raise ValueError(f"Unexpected {dataset_name} class ID: {label}")
+        if subject_id in label_by_id:
+            raise ValueError(f"Duplicate {dataset_name} subject ID: {subject_id}")
+        label_by_id[subject_id] = label
+
+    feature_by_id = {}
+    pattern = re.compile(r"^feature_(\d+)\.npy$")
+    for path in sorted((data_root / "Feature").glob("*.npy")):
+        match = pattern.fullmatch(path.name)
+        if match is None:
+            raise ValueError(f"Unexpected {dataset_name} feature file: {path.name}")
+        subject_id = int(match.group(1))
+        if subject_id in feature_by_id:
+            raise ValueError(f"Duplicate {dataset_name} feature ID: {subject_id}")
+        feature_by_id[subject_id] = path.resolve()
+
+    if set(feature_by_id) != set(label_by_id):
+        raise ValueError(
+            f"{dataset_name} feature/label subject mismatch: "
+            f"missing_features={sorted(set(label_by_id) - set(feature_by_id))}, "
+            f"missing_labels={sorted(set(feature_by_id) - set(label_by_id))}"
+        )
+
+    records = []
+    for subject_id in sorted(label_by_id):
+        feature_path = feature_by_id[subject_id]
+        array = np.load(feature_path, mmap_mode="r", allow_pickle=False)
+        expected_tail = (256, spec["channels"])
+        if array.ndim != 3 or tuple(array.shape[1:]) != expected_tail:
+            raise ValueError(
+                f"Unexpected {dataset_name} feature shape for subject "
+                f"{subject_id}: {array.shape}; expected [N,{expected_tail[0]},"
+                f"{expected_tail[1]}]."
+            )
+        if array.dtype != np.float64:
+            raise ValueError(
+                f"Unexpected {dataset_name} source dtype for subject "
+                f"{subject_id}: {array.dtype}; expected float64."
+            )
+        records.append(
+            EEGMedformerSubjectRecord(
+                subject_id=subject_id,
+                label=label_by_id[subject_id],
+                feature_path=feature_path,
+                window_count=int(array.shape[0]),
+            )
+        )
+
+    split_ids = {
+        split: tuple(int(value) for value in ids)
+        for split, ids in spec["split_ids"].items()
+    }
+    assigned = [value for ids in split_ids.values() for value in ids]
+    if len(assigned) != len(set(assigned)):
+        raise ValueError(f"{dataset_name} subject leakage detected between splits.")
+    available = set(label_by_id)
+    unknown = set(assigned) - available
+    if unknown:
+        raise ValueError(f"{dataset_name} split contains unknown subjects: {unknown}")
+    excluded_ids = tuple(sorted(available - set(assigned)))
+    expected_excluded = tuple(spec.get("expected_excluded_ids", ()))
+    if excluded_ids != expected_excluded:
+        raise ValueError(
+            f"{dataset_name} excluded cohort mismatch: {excluded_ids}; "
+            f"expected {expected_excluded}."
+        )
+    for split, expected in spec["expected_subject_counts"].items():
+        if len(split_ids[split]) != expected:
+            raise ValueError(
+                f"{dataset_name} {split} subject count mismatch: "
+                f"{len(split_ids[split])}; expected {expected}."
+            )
+
+    content_sha256 = spec["content_sha256"]
+    if verify_content:
+        content_sha256 = _eeg_medformer_content_sha256(data_root)
+        if content_sha256 != spec["content_sha256"]:
+            raise ValueError(
+                f"{dataset_name} aggregate content SHA-256 mismatch: "
+                f"{content_sha256}; expected {spec['content_sha256']}"
+            )
+
+    return EEGMedformerInventory(
+        dataset_name=dataset_name,
+        data_root=data_root,
+        records=tuple(records),
+        split_ids=split_ids,
+        excluded_ids=excluded_ids,
+        protocol=spec["protocol"],
+        label_sha256=label_sha256,
+        content_sha256=content_sha256,
+    )
+
+
+def _normalize_eeg_medformer_windows(windows):
+    windows = np.asarray(windows)
+    if windows.ndim != 3:
+        raise ValueError(f"Expected EEG windows [N,T,C], got {windows.shape}.")
+    if not np.isfinite(windows).all():
+        raise ValueError("Medformer EEG source contains NaN or infinite values.")
+    mean = windows.mean(axis=1, keepdims=True)
+    std = windows.std(axis=1, ddof=0, keepdims=True)
+    std = np.where(std == 0.0, 1.0, std)
+    normalized = ((windows - mean) / std).astype(np.float32)
+    if not np.isfinite(normalized).all():
+        raise ValueError("Medformer EEG normalization produced non-finite values.")
+    return normalized
+
+
+def _make_eeg_medformer_split_loader(inventory, split, batch_size):
+    spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
+    record_by_id = {record.subject_id: record for record in inventory.records}
+    subject_ids = inventory.split_ids[split]
+    total_windows = sum(record_by_id[value].window_count for value in subject_ids)
+    expected_windows = spec["expected_window_counts"][split]
+    if total_windows != expected_windows:
+        raise ValueError(
+            f"{inventory.dataset_name} {split} window count mismatch: "
+            f"{total_windows}; expected {expected_windows}."
+        )
+
+    inputs = np.empty(
+        (total_windows, spec["channels"], 256), dtype=np.float32
+    )
+    labels = np.empty(total_windows, dtype=np.int64)
+    sample_subject_ids = np.empty(total_windows, dtype=np.int64)
+    sample_window_indices = np.empty(total_windows, dtype=np.int64)
+    cursor = 0
+    for subject_id in subject_ids:
+        record = record_by_id[subject_id]
+        source = np.load(record.feature_path, mmap_mode="r", allow_pickle=False)
+        normalized = _normalize_eeg_medformer_windows(source)
+        next_cursor = cursor + record.window_count
+        inputs[cursor:next_cursor] = normalized.transpose(0, 2, 1)
+        labels[cursor:next_cursor] = record.label
+        sample_subject_ids[cursor:next_cursor] = subject_id
+        sample_window_indices[cursor:next_cursor] = np.arange(
+            record.window_count, dtype=np.int64
+        )
+        cursor = next_cursor
+
+    tensor_dataset = TensorDataset(torch.from_numpy(inputs))
+    tensor_dataset.sample_subject_ids = sample_subject_ids
+    tensor_dataset.sample_window_indices = sample_window_indices
+    tensor_dataset.split_name = split
+    loader = DataLoader(
+        tensor_dataset,
+        num_workers=0,
+        batch_size=batch_size,
+        shuffle=False,
+    )
+    return loader, labels
+
+
+def get_eeg_medformer_dataloaders(dataset_name, args):
+    protocol = getattr(args, "eeg_protocol", "medformer_code_exact")
+    if protocol != "medformer_code_exact":
+        raise ValueError(f"Unsupported Medformer EEG protocol: {protocol}")
+    normalization = getattr(
+        args, "eeg_normalization", EEG_MEDFORMER_NORMALIZATION
+    )
+    if normalization != EEG_MEDFORMER_NORMALIZATION:
+        raise ValueError(f"Unsupported Medformer EEG normalization: {normalization}")
+
+    inventory = get_eeg_medformer_inventory(
+        args.data_dir, dataset_name, verify_content=True
+    )
+    train_loader, train_labels = _make_eeg_medformer_split_loader(
+        inventory, "train", args.batch_size
+    )
+    vali_loader, vali_labels = _make_eeg_medformer_split_loader(
+        inventory, "vali", args.batch_size
+    )
+    test_loader, test_labels = _make_eeg_medformer_split_loader(
+        inventory, "test", args.batch_size
+    )
+    bundle = EEGMedformerBundle(
+        inventory=inventory,
+        train_loader=train_loader,
+        train_labels=train_labels,
+        vali_loader=vali_loader,
+        vali_labels=vali_labels,
+        test_loader=test_loader,
+        test_labels=test_labels,
+    )
+
+    distributions = []
+    for split, labels in (
+        ("train", train_labels),
+        ("vali", vali_labels),
+        ("test", test_labels),
+    ):
+        values, counts = np.unique(labels, return_counts=True)
+        distribution = "/".join(
+            f"{int(value)}:{int(count)}" for value, count in zip(values, counts)
+        )
+        distributions.append(f"{split}=[{distribution}]")
+    print(
+        f"EEG {inventory.dataset_name}: "
+        f"train={len(train_labels)}, vali={len(vali_labels)}, "
+        f"test={len(test_labels)}; {' '.join(distributions)}; "
+        f"protocol={inventory.protocol}; normalization={normalization}; "
+        "subject_split=PASS; metric_unit=window"
+    )
+    return bundle
+
+
+def write_eeg_medformer_split_audit(bundle, result_dir):
+    split_dir = Path(result_dir) / "splits"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    inventory = bundle.inventory
+    output_path = split_dir / f"{inventory.dataset_name}_subject_split.csv"
+    spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
+    split_by_id = {}
+    for split, subject_ids in inventory.split_ids.items():
+        for subject_id in subject_ids:
+            split_by_id[subject_id] = split
+
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "dataset_name",
+                "protocol",
+                "normalization",
+                "metric_unit",
+                "legacy_subject_id",
+                "label_id",
+                "label_name",
+                "window_count",
+                "split",
+                "label_sha256",
+                "aggregate_content_sha256",
+            ]
+        )
+        for record in inventory.records:
+            writer.writerow(
+                [
+                    inventory.dataset_name,
+                    inventory.protocol,
+                    bundle.normalization,
+                    "processed_one_second_window",
+                    record.subject_id,
+                    record.label,
+                    spec["class_names"][record.label],
+                    record.window_count,
+                    split_by_id.get(record.subject_id, "excluded"),
+                    inventory.label_sha256,
+                    inventory.content_sha256,
+                ]
+            )
+    return output_path
 
 
 def find_aaai27_data_root(data_dir, dataset_name):
@@ -1150,8 +1787,10 @@ def _apply_aaai27_label_protocol(bundle, label_mode, batch_size):
 def _validate_aaai27_bundle(bundle, reference_module):
     reference_csv = bundle.reference_root / "split_reference_seed42.csv"
     reference = reference_module._read_reference_csv(reference_csv)
+    reference_status = "NOT_AVAILABLE"
     if bundle.dataset_name in reference:
         reference_module._verify_reference_assignment(bundle.train_dataset, reference)
+        reference_status = "PASS"
     reference_module._validate_label_file(bundle.train_dataset)
 
     split_items = (
@@ -1207,6 +1846,7 @@ def _validate_aaai27_bundle(bundle, reference_module):
             f"{bundle.train_dataset.expected_sample_count} total samples, "
             f"got {total_samples}"
         )
+    return reference_status
 
 
 def get_aaai27_dataloaders(dataset_name, args):
@@ -1261,7 +1901,7 @@ def get_aaai27_dataloaders(dataset_name, args):
         vali_dataset=split_datasets["vali"],
         test_dataset=split_datasets["test"],
     )
-    _validate_aaai27_bundle(bundle, reference_module)
+    reference_status = _validate_aaai27_bundle(bundle, reference_module)
 
     label_mode = getattr(args, "aaai27_label_mode", "original")
     _apply_aaai27_label_protocol(bundle, label_mode, args.batch_size)
@@ -1283,7 +1923,7 @@ def get_aaai27_dataloaders(dataset_name, args):
         f"train={len(bundle.train_labels)}, vali={len(bundle.vali_labels)}, "
         f"test={len(bundle.test_labels)}; "
         f"label_mode={label_mode}; {' '.join(split_distributions)}; "
-        "subject split/reference=PASS"
+        f"subject_split=PASS; reference={reference_status}"
     )
     return bundle
 

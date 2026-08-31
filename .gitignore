@@ -208,3 +208,9 @@ anonymous_artifact.*
 *.zip*
 FallTL.zip*
 dataset.zip*
+
+# Server-only inputs, backups, and independent experiment snapshots
+/data/
+/backups/
+/experiment_snapshots/
+/Checkpoint/

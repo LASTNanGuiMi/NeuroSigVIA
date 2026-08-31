@@ -29,6 +29,9 @@ NeuroSigViT-main/
 |-- main.py
 |-- src/
 |   |-- neurosigvit.py
+|   |-- med_activity_graph.py
+|   |-- medformer_graph/
+|   |-- patch_mindts.py
 |   |-- datautils.py
 |   `-- privacy.py
 |-- assets/
@@ -41,6 +44,9 @@ NeuroSigViT-main/
 |   `-- split_reference_seed42.csv
 |-- scripts/
 |   |-- run_selected_dataset.sh
+|   |-- run_med_activity_multimodal.sh
+|   |-- run_eeg_patch_mindts.sh
+|   |-- run_aaai27_patch_mindts.sh
 |   |-- run_shimmer_example.sh
 |   |-- run_pads_example.sh
 |   `-- test_aaai27_datasets.py
@@ -50,8 +56,13 @@ NeuroSigViT-main/
 `-- LICENSE
 ```
 
-The local dataset directories and links are runtime inputs and are excluded
-from anonymous source exports.
+The local dataset directories and links are runtime inputs. Datasets, model
+checkpoints, feature caches, logs, results, backups, and experiment snapshots
+remain on the server and are excluded from this source release.
+
+This repository contains the main development code. It is not the exact source
+snapshot used by the separate v5 four-dataset run; reproducing that run requires
+its matching snapshot, configuration, and runtime inputs.
 
 ## Environment
 
@@ -133,6 +144,32 @@ bash scripts/run_pads_example.sh
 `MODEL_DIR`, `MANTIS_DIR`, `DATA_DIR`, and `PYTHON_BIN` can be overridden as
 environment variables. Additional `main.py` arguments may follow the dataset
 key.
+
+### Additional code paths
+
+The source also includes MedActivity image transforms, adaptive granularity
+selection, and Patch-MindTS / Router development paths. The original Shimmer
+and PADS launchers above remain available.
+
+| Entry | Purpose |
+| --- | --- |
+| `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |
+| `src/patch_mindts.py` | Patch-MindTS and Router implementation |
+| `scripts/run_med_activity_multimodal.sh` | MedActivity multimodal launcher |
+| `scripts/run_eeg_patch_mindts.sh` | EEG Patch-MindTS launcher |
+| `scripts/run_aaai27_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
+| `scripts/test_*.py`, `tests/` | Module and integration checks |
+
+See [MedActivity implementation notes](docs/MEDACTIVITY.md) for the image and
+feature layouts. The MedActivity launcher uses seed 42 by default; the original selected-dataset
+launcher uses the default described above. Check each launcher's configuration
+and set dataset, checkpoint, cache, and output paths for your environment.
+For EEG runs, set `EEG_DATA_DIR` (default: `data/eeg/processed`);
+`PYTHON_BIN` defaults to the active environment's `python`.
+
+Run scripts from the repository root. Tests that use real datasets or frozen
+encoders require those local inputs; this source update does not report new
+benchmark results or establish equivalence between development and snapshot runs.
 
 ## Verification
 
