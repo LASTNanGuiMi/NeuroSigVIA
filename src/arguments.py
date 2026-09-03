@@ -534,13 +534,24 @@ def parse_args():
 
     parser.add_argument(
         "--mlp_early_stop_strategy",
-        choices=["raw_selection_key", "ema_primary"],
+        choices=["raw_selection_key", "raw_primary", "ema_primary"],
         default="raw_selection_key",
         help=(
             "Early-stopping monitor. raw_selection_key preserves the legacy "
-            "checkpoint-key behavior; ema_primary smooths the primary "
+            "checkpoint-key behavior; raw_primary applies min_delta to the "
+            "unsmoothed primary validation metric; ema_primary smooths the primary "
             "validation metric while checkpoint saving still uses the raw "
             "criterion"
+        ),
+    )
+
+    parser.add_argument(
+        "--mlp_early_stop_warmup_epochs",
+        type=int,
+        default=0,
+        help=(
+            "Number of initial MLP epochs excluded from early-stopping and "
+            "ReduceLROnPlateau monitoring"
         ),
     )
 
@@ -572,6 +583,34 @@ def parse_args():
             "Minimum increase in the smoothed primary validation metric that "
             "resets early-stopping patience"
         ),
+    )
+
+    parser.add_argument(
+        "--mlp_lr_scheduler",
+        choices=["none", "reduce_on_plateau"],
+        default="none",
+        help="Optional validation-metric learning-rate scheduler for MLP training",
+    )
+
+    parser.add_argument(
+        "--mlp_lr_scheduler_patience",
+        type=int,
+        default=4,
+        help="ReduceLROnPlateau patience after monitor warmup",
+    )
+
+    parser.add_argument(
+        "--mlp_lr_scheduler_factor",
+        type=float,
+        default=0.5,
+        help="Multiplicative ReduceLROnPlateau learning-rate factor",
+    )
+
+    parser.add_argument(
+        "--mlp_lr_scheduler_min_lr",
+        type=float,
+        default=1.0e-6,
+        help="Minimum learning rate used by ReduceLROnPlateau",
     )
 
     parser.add_argument(
@@ -1066,6 +1105,13 @@ def parse_args():
     if args.mlp_early_stop_patience < 0:
         parser.error("--mlp_early_stop_patience must be non-negative")
     if (
+        args.mlp_early_stop_warmup_epochs < 0
+        or args.mlp_early_stop_warmup_epochs > args.mlp_epochs
+    ):
+        parser.error(
+            "--mlp_early_stop_warmup_epochs must lie in [0, --mlp_epochs]"
+        )
+    if (
         args.mlp_early_stop_min_epochs < 0
         or args.mlp_early_stop_min_epochs > args.mlp_epochs
     ):
@@ -1080,6 +1126,21 @@ def parse_args():
         or args.mlp_early_stop_min_delta < 0.0
     ):
         parser.error("--mlp_early_stop_min_delta must be finite and non-negative")
+    if args.mlp_lr_scheduler_patience < 0:
+        parser.error("--mlp_lr_scheduler_patience must be non-negative")
+    if (
+        not math.isfinite(args.mlp_lr_scheduler_factor)
+        or not 0.0 < args.mlp_lr_scheduler_factor < 1.0
+    ):
+        parser.error("--mlp_lr_scheduler_factor must lie in (0, 1)")
+    if (
+        not math.isfinite(args.mlp_lr_scheduler_min_lr)
+        or args.mlp_lr_scheduler_min_lr < 0.0
+        or args.mlp_lr_scheduler_min_lr > args.mlp_lr
+    ):
+        parser.error(
+            "--mlp_lr_scheduler_min_lr must be finite and lie in [0, --mlp_lr]"
+        )
     if args.pretrain_epochs < 0:
         parser.error("--pretrain_epochs must be non-negative")
     if args.outer_patch_size <= 0:

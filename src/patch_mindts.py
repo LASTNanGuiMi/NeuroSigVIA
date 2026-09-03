@@ -2735,10 +2735,10 @@ class _EarlyStoppingMonitor:
     """Track a stopping signal without changing raw checkpoint selection.
 
     ``raw_selection_key`` exactly preserves the historical lexicographic
-    monitor, including the subject log-loss tie-breaker. ``ema_primary`` is
+    monitor, including the subject log-loss tie-breaker. ``raw_primary``
+    applies ``min_delta`` to the unsmoothed primary metric. ``ema_primary`` is
     intended for small validation cohorts: only the primary F1 component is
-    smoothed, while the caller continues to save checkpoints from the raw
-    selection key.
+    smoothed. The caller always saves checkpoints from the raw selection key.
     """
 
     def __init__(
@@ -2746,13 +2746,17 @@ class _EarlyStoppingMonitor:
         strategy,
         patience,
         min_epochs=0,
+        warmup_epochs=0,
         ema_decay=0.6,
         min_delta=0.0,
     ):
-        if strategy not in {"raw_selection_key", "ema_primary"}:
+        if strategy not in {"raw_selection_key", "raw_primary", "ema_primary"}:
             raise ValueError(f"unsupported early-stop strategy: {strategy}")
-        if patience < 0 or min_epochs < 0:
-            raise ValueError("early-stop patience and min_epochs must be non-negative")
+        if patience < 0 or min_epochs < 0 or warmup_epochs < 0:
+            raise ValueError(
+                "early-stop patience, min_epochs, and warmup_epochs must be "
+                "non-negative"
+            )
         if not math.isfinite(ema_decay) or not 0.0 <= ema_decay < 1.0:
             raise ValueError("early-stop EMA decay must lie in [0, 1)")
         if not math.isfinite(min_delta) or min_delta < 0.0:
@@ -2760,6 +2764,7 @@ class _EarlyStoppingMonitor:
         self.strategy = strategy
         self.patience = int(patience)
         self.min_epochs = int(min_epochs)
+        self.warmup_epochs = int(warmup_epochs)
         self.ema_decay = float(ema_decay)
         self.min_delta = float(min_delta)
         self.ema_score = None
@@ -2776,11 +2781,38 @@ class _EarlyStoppingMonitor:
             raise ValueError("early-stop selection key must be finite and non-empty")
         raw_score = raw_key[0]
 
+        # Warmup excludes validation observations from the stopping state.
+        # Raw checkpoint selection remains independent and may still retain an
+        # early epoch for restore_best_weights semantics.
+        if epoch <= self.warmup_epochs:
+            return {
+                "raw_score": float(raw_score),
+                "smoothed_score": float(raw_score),
+                "best_score": (
+                    float(self.best_score) if self.best_score is not None else None
+                ),
+                "improved": False,
+                "epochs_without_improvement": int(
+                    self.epochs_without_improvement
+                ),
+                "in_warmup": True,
+                "eligible": False,
+                "should_stop": False,
+            }
+
         if self.strategy == "raw_selection_key":
             smoothed_score = raw_score
             improved = self.best_raw_key is None or raw_key > self.best_raw_key
             if improved:
                 self.best_raw_key = raw_key
+                self.best_score = raw_score
+        elif self.strategy == "raw_primary":
+            smoothed_score = raw_score
+            improved = (
+                self.best_score is None
+                or raw_score > self.best_score + self.min_delta
+            )
+            if improved:
                 self.best_score = raw_score
         else:
             if self.ema_score is None:
@@ -2816,9 +2848,36 @@ class _EarlyStoppingMonitor:
             "epochs_without_improvement": int(
                 self.epochs_without_improvement
             ),
+            "in_warmup": False,
             "eligible": bool(eligible),
             "should_stop": bool(should_stop),
         }
+
+
+def _build_patch_lr_scheduler(
+    optimizer,
+    scheduler_type,
+    patience=4,
+    factor=0.5,
+    min_lr=1.0e-6,
+):
+    if scheduler_type == "none":
+        return None
+    if scheduler_type != "reduce_on_plateau":
+        raise ValueError(f"unsupported learning-rate scheduler: {scheduler_type}")
+    if patience < 0:
+        raise ValueError("scheduler patience must be non-negative")
+    if not math.isfinite(factor) or not 0.0 < factor < 1.0:
+        raise ValueError("scheduler factor must lie in (0, 1)")
+    if not math.isfinite(min_lr) or min_lr < 0.0:
+        raise ValueError("scheduler min_lr must be finite and non-negative")
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="max",
+        patience=int(patience),
+        factor=float(factor),
+        min_lr=float(min_lr),
+    )
 
 
 def _balanced_class_weights(label_indices, num_classes, device):
@@ -4009,11 +4068,17 @@ def _save_patch_checkpoint(
     early_stop_strategy="raw_selection_key",
     early_stop_patience=0,
     early_stop_min_epochs=0,
+    early_stop_warmup_epochs=0,
     early_stop_ema_decay=0.6,
     early_stop_min_delta=0.0,
     early_stop_best_score=None,
     early_stopped=False,
     stopped_epoch=None,
+    lr_scheduler_type="none",
+    lr_scheduler_patience=4,
+    lr_scheduler_factor=0.5,
+    lr_scheduler_min_lr=1.0e-6,
+    final_learning_rate=None,
 ):
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -4058,11 +4123,19 @@ def _save_patch_checkpoint(
             else "epoch:min"
         ),
         "early_stopping": {
+            "monitor": (
+                "val_subject_macro_f1"
+                if checkpoint_selection_effective == "subject_macro_f1"
+                else "val_macro_f1"
+            ),
+            "mode": "max",
             "strategy": early_stop_strategy,
             "patience": int(early_stop_patience),
             "min_epochs": int(early_stop_min_epochs),
+            "warmup_epochs": int(early_stop_warmup_epochs),
             "ema_decay": float(early_stop_ema_decay),
             "min_delta": float(early_stop_min_delta),
+            "restore_best_weights": True,
             "best_monitor_score": (
                 float(early_stop_best_score)
                 if early_stop_best_score is not None
@@ -4073,6 +4146,24 @@ def _save_patch_checkpoint(
                 int(stopped_epoch) if stopped_epoch is not None else None
             ),
             "checkpoint_selection_uses_raw_metric": True,
+        },
+        "lr_scheduler": {
+            "type": lr_scheduler_type,
+            "monitor": (
+                "val_subject_macro_f1"
+                if checkpoint_selection_effective == "subject_macro_f1"
+                else "val_macro_f1"
+            ),
+            "mode": "max",
+            "warmup_epochs": int(early_stop_warmup_epochs),
+            "patience": int(lr_scheduler_patience),
+            "factor": float(lr_scheduler_factor),
+            "min_lr": float(lr_scheduler_min_lr),
+            "final_learning_rate": (
+                float(final_learning_rate)
+                if final_learning_rate is not None
+                else None
+            ),
         },
         "selected_validation_window_metrics": {
             key: float(value)
@@ -4175,16 +4266,27 @@ def train_patch_mindts_classifier(
     router_load_balance_weight=0.005,
     early_stop_strategy="raw_selection_key",
     early_stop_min_epochs=0,
+    early_stop_warmup_epochs=0,
     early_stop_ema_decay=0.6,
     early_stop_min_delta=0.0,
+    lr_scheduler_type="none",
+    lr_scheduler_patience=4,
+    lr_scheduler_factor=0.5,
+    lr_scheduler_min_lr=1.0e-6,
 ):
     """Train the dedicated patch-level classifier and return legacy metrics API."""
     if epochs <= 0 or early_stop_patience < 0:
         raise ValueError("epochs must be positive and patience non-negative")
-    if early_stop_strategy not in {"raw_selection_key", "ema_primary"}:
+    if early_stop_strategy not in {
+        "raw_selection_key",
+        "raw_primary",
+        "ema_primary",
+    }:
         raise ValueError(f"unsupported early-stop strategy: {early_stop_strategy}")
     if early_stop_min_epochs < 0 or early_stop_min_epochs > epochs:
         raise ValueError("early-stop min_epochs must lie in [0, epochs]")
+    if early_stop_warmup_epochs < 0 or early_stop_warmup_epochs > epochs:
+        raise ValueError("early-stop warmup_epochs must lie in [0, epochs]")
     if (
         not math.isfinite(early_stop_ema_decay)
         or not 0.0 <= early_stop_ema_decay < 1.0
@@ -4192,6 +4294,18 @@ def train_patch_mindts_classifier(
         raise ValueError("early-stop EMA decay must lie in [0, 1)")
     if not math.isfinite(early_stop_min_delta) or early_stop_min_delta < 0.0:
         raise ValueError("early-stop min_delta must be finite and non-negative")
+    if lr_scheduler_type not in {"none", "reduce_on_plateau"}:
+        raise ValueError(f"unsupported learning-rate scheduler: {lr_scheduler_type}")
+    if lr_scheduler_patience < 0:
+        raise ValueError("scheduler patience must be non-negative")
+    if not math.isfinite(lr_scheduler_factor) or not 0.0 < lr_scheduler_factor < 1.0:
+        raise ValueError("scheduler factor must lie in (0, 1)")
+    if (
+        not math.isfinite(lr_scheduler_min_lr)
+        or lr_scheduler_min_lr < 0.0
+        or lr_scheduler_min_lr > lr
+    ):
+        raise ValueError("scheduler min_lr must be finite and lie in [0, lr]")
     if not math.isfinite(alignment_weight) or alignment_weight < 0.0:
         raise ValueError("alignment_weight must be finite and non-negative")
     for name, value in (
@@ -4461,6 +4575,13 @@ def train_patch_mindts_classifier(
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=lr, weight_decay=weight_decay
     )
+    lr_scheduler = _build_patch_lr_scheduler(
+        optimizer,
+        lr_scheduler_type,
+        patience=lr_scheduler_patience,
+        factor=lr_scheduler_factor,
+        min_lr=lr_scheduler_min_lr,
+    )
     if class_weight == "balanced":
         weights = _balanced_class_weights(
             train_label_indices[train_indices], len(classes), device
@@ -4478,6 +4599,7 @@ def train_patch_mindts_classifier(
         strategy=early_stop_strategy,
         patience=early_stop_patience,
         min_epochs=early_stop_min_epochs,
+        warmup_epochs=early_stop_warmup_epochs,
         ema_decay=early_stop_ema_decay,
         min_delta=early_stop_min_delta,
     )
@@ -4485,6 +4607,7 @@ def train_patch_mindts_classifier(
     stopped_epoch = None
     training_history = []
     for epoch in range(epochs):
+        learning_rate = float(optimizer.param_groups[0]["lr"])
         statistics, mean_weights = _run_patch_epoch(
             model,
             fit_loader,
@@ -4515,9 +4638,19 @@ def train_patch_mindts_classifier(
             best_selection_key is None or selection_key > best_selection_key
         )
         early_stop_state = early_stop_monitor.update(selection_key, epoch + 1)
+        lr_scheduler_stepped = False
+        if lr_scheduler is not None and epoch + 1 > early_stop_warmup_epochs:
+            lr_scheduler.step(float(selection_key[0]))
+            lr_scheduler_stepped = True
+        next_learning_rate = float(optimizer.param_groups[0]["lr"])
+        lr_reduced = next_learning_rate < learning_rate
         epoch_record = {
             "epoch": epoch + 1,
             **statistics,
+            "learning_rate": learning_rate,
+            "next_learning_rate": next_learning_rate,
+            "lr_scheduler_stepped": bool(lr_scheduler_stepped),
+            "lr_reduced": bool(lr_reduced),
             "validation_macro_f1": float(validation_metrics["macro_f1"]),
             "validation_subject_macro_f1": (
                 float(validation_metrics["subject_macro_f1"])
@@ -4539,6 +4672,7 @@ def train_patch_mindts_classifier(
                 "epochs_without_improvement"
             ],
             "early_stop_eligible": early_stop_state["eligible"],
+            "early_stop_in_warmup": early_stop_state["in_warmup"],
             "mean_granularity_weights": mean_weights,
         }
         training_history.append(epoch_record)
@@ -4565,6 +4699,7 @@ def train_patch_mindts_classifier(
             f"early_stop_wait="
             f"{early_stop_state['epochs_without_improvement']}/"
             f"{early_stop_patience} | "
+            f"lr={learning_rate:.3e}->{next_learning_rate:.3e} | "
             f"granularity={mean_weights}"
         )
         if checkpoint_improved:
@@ -4576,8 +4711,9 @@ def train_patch_mindts_classifier(
             stopped_epoch = epoch + 1
             print(
                 f"Patch MLP early stopping at epoch {epoch + 1} "
-                f"(strategy={early_stop_strategy}, min_epochs="
-                f"{early_stop_min_epochs}, patience={early_stop_patience})"
+                f"(strategy={early_stop_strategy}, warmup_epochs="
+                f"{early_stop_warmup_epochs}, min_epochs={early_stop_min_epochs}, "
+                f"patience={early_stop_patience})"
             )
             break
 
@@ -4622,11 +4758,17 @@ def train_patch_mindts_classifier(
             early_stop_strategy=early_stop_strategy,
             early_stop_patience=early_stop_patience,
             early_stop_min_epochs=early_stop_min_epochs,
+            early_stop_warmup_epochs=early_stop_warmup_epochs,
             early_stop_ema_decay=early_stop_ema_decay,
             early_stop_min_delta=early_stop_min_delta,
             early_stop_best_score=early_stop_monitor.best_score,
             early_stopped=early_stopped,
             stopped_epoch=stopped_epoch,
+            lr_scheduler_type=lr_scheduler_type,
+            lr_scheduler_patience=lr_scheduler_patience,
+            lr_scheduler_factor=lr_scheduler_factor,
+            lr_scheduler_min_lr=lr_scheduler_min_lr,
+            final_learning_rate=float(optimizer.param_groups[0]["lr"]),
         )
 
     test_metrics, test_details = _evaluate_patch(
@@ -4681,13 +4823,23 @@ def train_patch_mindts_classifier(
                 "checkpoint_selection_effective": checkpoint_metric_effective,
                 "checkpoint_selection_key": list(best_selection_key),
                 "early_stopping": {
+                    "monitor": (
+                        "val_subject_macro_f1"
+                        if checkpoint_metric_effective == "subject_macro_f1"
+                        else "val_macro_f1"
+                    ),
+                    "mode": "max",
                     "strategy": early_stop_strategy,
                     "patience": int(early_stop_patience),
                     "min_epochs": int(early_stop_min_epochs),
+                    "warmup_epochs": int(early_stop_warmup_epochs),
                     "ema_decay": float(early_stop_ema_decay),
                     "min_delta": float(early_stop_min_delta),
-                    "best_monitor_score": float(
-                        early_stop_monitor.best_score
+                    "restore_best_weights": True,
+                    "best_monitor_score": (
+                        float(early_stop_monitor.best_score)
+                        if early_stop_monitor.best_score is not None
+                        else None
                     ),
                     "early_stopped": bool(early_stopped),
                     "stopped_epoch": (
@@ -4697,6 +4849,22 @@ def train_patch_mindts_classifier(
                     ),
                     "completed_epochs": int(len(training_history)),
                     "checkpoint_selection_uses_raw_metric": True,
+                },
+                "lr_scheduler": {
+                    "type": lr_scheduler_type,
+                    "monitor": (
+                        "val_subject_macro_f1"
+                        if checkpoint_metric_effective == "subject_macro_f1"
+                        else "val_macro_f1"
+                    ),
+                    "mode": "max",
+                    "warmup_epochs": int(early_stop_warmup_epochs),
+                    "patience": int(lr_scheduler_patience),
+                    "factor": float(lr_scheduler_factor),
+                    "min_lr": float(lr_scheduler_min_lr),
+                    "final_learning_rate": float(
+                        optimizer.param_groups[0]["lr"]
+                    ),
                 },
                 "epochs": training_history,
             },

@@ -27,6 +27,12 @@ full protocol.
 ```text
 NeuroSigViT-main/
 |-- main.py
+|-- run_selector_comparison.py
+|-- selector_host.py
+|-- selector_policies/
+|   |-- timemosaic.py
+|   `-- pathformer.py
+|-- experiment_common.py
 |-- src/
 |   |-- neurosigvit.py
 |   |-- med_activity_graph.py
@@ -60,9 +66,10 @@ The local dataset directories and links are runtime inputs. Datasets, model
 checkpoints, feature caches, logs, results, backups, and experiment snapshots
 remain on the server and are excluded from this source release.
 
-This repository contains the main development code. It is not the exact source
-snapshot used by the separate v5 four-dataset run; reproducing that run requires
-its matching snapshot, configuration, and runtime inputs.
+This repository contains the scientific source and fixed configuration used by
+the selector-only TimeMosaic comparison. Machine-local dataset and checkpoint
+paths have been replaced by environment variables; model definitions,
+hyperparameters, splits, and the selector-only protocol are preserved.
 
 ## Environment
 
@@ -145,6 +152,50 @@ bash scripts/run_pads_example.sh
 environment variables. Additional `main.py` arguments may follow the dataset
 key.
 
+### TimeMosaic selector-only configuration
+
+The archived TimeMosaic experiments used `selector_only_v1_shared_v5_loss`.
+This is a controlled adaptation of the hard Gumbel top-1 selector from
+[TimeMosaic](https://github.com/BenchCouncil/TimeMosaic/tree/214423b7f0b4653d04620814380a9301580285cc),
+not a reproduction of the complete forecasting model. Only the adaptive
+granularity selector changes; Activity Graph construction, frozen CLIP and
+Mantis encoders, Patch-MindTS fusion, classifier, loss, and data splits remain
+shared.
+
+| Setting | Archived value |
+| --- | --- |
+| Datasets | ADFTD, TDBRAIN, APAVA, Shimmer10, PADS11 |
+| Seeds | 42, 43, 44 |
+| Outer window / stride | 64 / 64 |
+| Activity Graph candidates | `(4,)`, `(8,)`, `(16,)` |
+| TimeMosaic selector | two-layer MLP, hard Gumbel top-1, temperature 0.5 |
+| Fusion width / heads | 128 / 2 |
+| Classifier | hidden width 128, 2 layers, dropout 0.1 |
+| Optimizer | learning rate `3e-4`, weight decay `1e-3`, 100 epochs |
+| Early stopping | `raw_primary`, 10-epoch warmup, patience 12, minimum delta 0.002 |
+| LR scheduler | ReduceLROnPlateau, patience 4, factor 0.5, minimum LR `1e-6` |
+| Batch size | ADFTD/TDBRAIN/APAVA 8; Shimmer10 1; PADS11 4 |
+
+Set portable asset locations and launch one run from the repository root:
+
+```bash
+export NEUROSIGVIT_EEG_ROOT=/path/to/data/eeg
+export NEUROSIGVIT_AAAI27_ROOT=/path/to/data/Neuro
+export NEUROSIGVIT_CLIP_PATH=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
+export NEUROSIGVIT_MANTIS_PATH=/path/to/Mantis-8M
+
+CUDA_VISIBLE_DEVICES=0 python run_selector_comparison.py \
+  --method timemosaic \
+  --dataset adftd \
+  --seed 42 \
+  --output-root results/selector_only
+```
+
+The exact runtime values are also encoded in `run_selector_comparison.py`.
+`selector_host.py` installs the selected routing policy into the unchanged
+`PatchMindTSFusionModule`; `selector_policies/timemosaic.py` contains the
+TimeMosaic-style selector.
+
 ### Additional code paths
 
 The source also includes MedActivity image transforms, adaptive granularity
@@ -155,6 +206,9 @@ and PADS launchers above remain available.
 | --- | --- |
 | `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |
 | `src/patch_mindts.py` | Patch-MindTS and Router implementation |
+| `selector_policies/timemosaic.py` | TimeMosaic-style adaptive granularity selector |
+| `selector_host.py` | Controlled selector replacement on the shared Patch-MindTS host |
+| `run_selector_comparison.py` | Fixed five-dataset selector-only experiment configuration |
 | `scripts/run_med_activity_multimodal.sh` | MedActivity multimodal launcher |
 | `scripts/run_eeg_patch_mindts.sh` | EEG Patch-MindTS launcher |
 | `scripts/run_aaai27_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
