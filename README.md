@@ -54,8 +54,7 @@ NeuroSigViT-main/
 |   |-- run_eeg_patch_mindts.sh
 |   |-- run_aaai27_patch_mindts.sh
 |   |-- run_shimmer_example.sh
-|   |-- run_pads_example.sh
-|   `-- test_aaai27_datasets.py
+|   `-- run_pads_example.sh
 |-- DATA_PROCESSING.md
 |-- ANONYMITY.md
 |-- requirements.txt
@@ -212,7 +211,6 @@ and PADS launchers above remain available.
 | `scripts/run_med_activity_multimodal.sh` | MedActivity multimodal launcher |
 | `scripts/run_eeg_patch_mindts.sh` | EEG Patch-MindTS launcher |
 | `scripts/run_aaai27_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
-| `scripts/test_*.py`, `tests/` | Module and integration checks |
 
 See [MedActivity implementation notes](docs/MEDACTIVITY.md) for the image and
 feature layouts. The MedActivity launcher uses seed 42 by default; the original selected-dataset
@@ -221,20 +219,23 @@ and set dataset, checkpoint, cache, and output paths for your environment.
 For EEG runs, set `EEG_DATA_DIR` (default: `data/eeg/processed`);
 `PYTHON_BIN` defaults to the active environment's `python`.
 
-Run scripts from the repository root. Tests that use real datasets or frozen
-encoders require those local inputs; this source update does not report new
+Run scripts from the repository root. Real experiments require the corresponding
+local datasets and frozen encoders; this source update does not report new
 benchmark results or establish equivalence between development and snapshot runs.
 
 ## Verification
 
 ```bash
-python -m compileall -q main.py src data_loading scripts
+python -m compileall -q main.py src data_loading scripts selector_policies \
+  selector_host.py experiment_common.py run_selector_comparison.py
 bash -n scripts/run_selected_dataset.sh
-python scripts/test_aaai27_datasets.py --data-dir data/Neuro
+bash -n scripts/run_eeg_patch_mindts.sh
+bash -n scripts/run_aaai27_patch_mindts.sh
 ```
 
-These checks cover the maintained Shimmer and PADS subject splits, clinical
-endpoints, tensor shapes, label mappings, and training-only normalization.
+These checks verify that the published Python sources compile and the maintained
+shell launchers parse. Dataset and model behavior is verified by running the
+selected experiment with the released data and frozen weights.
 
 ## Anonymous release
 
