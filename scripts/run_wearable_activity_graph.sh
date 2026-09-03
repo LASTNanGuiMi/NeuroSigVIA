@@ -10,6 +10,7 @@ MANTIS_DIR="${MANTIS_DIR:-../Checkpoint/Checkpoint/models--paris-noah--Mantis-8M
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 DATA_DIR="${DATA_DIR:-data}"
+WEARABLE_DATA_ROOT="${WEARABLE_DATA_ROOT:-$DATA_DIR/wearable}"
 GPU="${GPU:-0}"
 SEED="${SEED:-2022}"
 EPOCHS="${EPOCHS:-40}"
@@ -23,18 +24,18 @@ fi
 
 case "$DATASET_KEY" in
   shimmer10)
-    DATASET_GROUP="aaai27"
+    DATASET_GROUP="wearable"
     DATASET_NAME="Shimmer_10_session10_AFC"
     LABEL_PROTOCOL="shimmer_hc_vs_pd"
-    dataset_args=(--aaai27_label_mode shimmer_hc_vs_pd)
-    required_data_paths=("$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME")
+    dataset_args=(--wearable_label_mode shimmer_hc_vs_pd)
+    required_data_paths=("$WEARABLE_DATA_ROOT/$DATASET_NAME")
     ;;
   pads11)
-    DATASET_GROUP="aaai27"
+    DATASET_GROUP="wearable"
     DATASET_NAME="PADS_11_task08_TouchIndex"
     LABEL_PROTOCOL="pads_pd_vs_hc"
-    dataset_args=(--aaai27_label_mode pads_pd_vs_hc)
-    required_data_paths=("$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME")
+    dataset_args=(--wearable_label_mode pads_pd_vs_hc)
+    required_data_paths=("$WEARABLE_DATA_ROOT/$DATASET_NAME")
     ;;
   *)
     echo "Usage: $0 {shimmer10|pads11} [extra main.py arguments]" >&2
@@ -48,11 +49,11 @@ FEATURE_CACHE_DIR="${FEATURE_CACHE_DIR:-feature_cache/${DATASET_KEY}}"
 for path in "$MODEL_DIR" "$MANTIS_DIR" "${required_data_paths[@]}"; do
   [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done
-if [[ "$DATASET_GROUP" == "aaai27" ]]; then
+if [[ "$DATASET_GROUP" == "wearable" ]]; then
   for path in \
-    "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Feature" \
-    "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Label/label.npy" \
-    "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Meta/subject_map.csv" \
+    "$WEARABLE_DATA_ROOT/$DATASET_NAME/Feature" \
+    "$WEARABLE_DATA_ROOT/$DATASET_NAME/Label/label.npy" \
+    "$WEARABLE_DATA_ROOT/$DATASET_NAME/Meta/subject_map.csv" \
     "data_loading/split_reference_seed42.csv"; do
     [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
   done
@@ -87,7 +88,7 @@ command=(
   --mlp_epochs "$EPOCHS"
   --mlp_early_stop_patience "$PATIENCE"
   --batch_size 16
-  --data_dir "$DATA_DIR"
+  --data_dir "$WEARABLE_DATA_ROOT"
   --datasets "$DATASET_GROUP"
   --dataset_names "$DATASET_NAME"
   "${dataset_args[@]}"

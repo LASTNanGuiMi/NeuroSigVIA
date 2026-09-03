@@ -41,15 +41,15 @@ from src.analysis import (
 from src.arguments import parse_args
 from src.classifier import train_classifier
 from src.datautils import (
-    AAAI27_DATASET_NAMES,
+    WEARABLE_DATASET_NAMES,
     EEG_MEDFORMER_DATASET_NAMES,
     get_falltl_comparison_dataloaders,
-    get_aaai27_dataloaders,
+    get_wearable_dataloaders,
     get_eeg_medformer_dataloaders,
     get_uci_har_official_dataloaders,
     get_dataloader,
     write_falltl_comparison_split_audit,
-    write_aaai27_split_audit,
+    write_wearable_split_audit,
     write_eeg_medformer_split_audit,
     write_uci_har_subject_split_audit,
 )
@@ -515,7 +515,7 @@ def build_feature_cache_signature(
                 "local checkpoint identity, which this CLI does not expose. "
                 "Disable --moment or --feature_cache_dir."
             )
-    has_fixed_split = args.datasets in {"aaai27", "eeg"} or (
+    has_fixed_split = args.datasets in {"wearable", "eeg"} or (
         args.datasets == "falltl" and args.falltl_protocol == "comparison_binary"
     ) or (
         args.datasets == "uci" and args.uci_protocol == "official_subject"
@@ -528,7 +528,7 @@ def build_feature_cache_signature(
         "dataset": dataset,
         "dataset_names": args.dataset_names,
         "channels": channels,
-        "label_mode": args.aaai27_label_mode,
+        "label_mode": args.wearable_label_mode,
         "eeg_protocol": args.eeg_protocol,
         "eeg_normalization": args.eeg_normalization,
         "falltl_protocol": args.falltl_protocol,
@@ -679,7 +679,7 @@ if __name__ == "__main__":
         "random_seed": args.random_seed,
         "image_mode": args.image_mode,
         "modal_interaction": args.modal_interaction,
-        "aaai27_label_mode": args.aaai27_label_mode,
+        "wearable_label_mode": args.wearable_label_mode,
         "eeg_protocol": args.eeg_protocol,
         "eeg_normalization": args.eeg_normalization,
         "uci_protocol": args.uci_protocol,
@@ -689,7 +689,7 @@ if __name__ == "__main__":
             "legacy_subject_file_id"
             if args.datasets == "eeg"
             else "subject"
-            if args.datasets in {"aaai27", "uci"}
+            if args.datasets in {"wearable", "uci"}
             else "activity_code+trial_no"
             if args.datasets == "falltl"
             and args.falltl_protocol == "comparison_binary"
@@ -984,13 +984,13 @@ if __name__ == "__main__":
         datasets = ["FallTL"]
     elif args.datasets == "feng":
         datasets = ["Feng"]
-    elif args.datasets == "aaai27":
-        datasets = list(AAAI27_DATASET_NAMES)
+    elif args.datasets == "wearable":
+        datasets = list(WEARABLE_DATASET_NAMES)
     elif args.datasets == "eeg":
         datasets = list(EEG_MEDFORMER_DATASET_NAMES)
     else:
         raise ValueError(
-            "Only UCR, UEA, UCI, FLAAP, FallTL, Feng, AAAI27, and EEG benchmarks "
+            "Only UCR, UEA, UCI, FLAAP, FallTL, Feng, wearable, and EEG benchmarks "
             "are available."
         )
 
@@ -1020,16 +1020,16 @@ if __name__ == "__main__":
             test_labels = eeg_bundle.test_labels
             audit_path = write_eeg_medformer_split_audit(eeg_bundle, result_dir)
             print(f"EEG subject split audit: {audit_path}")
-        elif args.datasets == "aaai27":
+        elif args.datasets == "wearable":
             fixed_validation_split = True
-            aaai27_bundle = get_aaai27_dataloaders(dataset, args)
-            train_loader = aaai27_bundle.train_loader
-            train_labels = aaai27_bundle.train_labels
-            vali_loader = aaai27_bundle.vali_loader
-            vali_labels = aaai27_bundle.vali_labels
-            test_loader = aaai27_bundle.test_loader
-            test_labels = aaai27_bundle.test_labels
-            audit_path = write_aaai27_split_audit(aaai27_bundle, result_dir)
+            wearable_bundle = get_wearable_dataloaders(dataset, args)
+            train_loader = wearable_bundle.train_loader
+            train_labels = wearable_bundle.train_labels
+            vali_loader = wearable_bundle.vali_loader
+            vali_labels = wearable_bundle.vali_labels
+            test_loader = wearable_bundle.test_loader
+            test_labels = wearable_bundle.test_labels
+            audit_path = write_wearable_split_audit(wearable_bundle, result_dir)
             print(f"Subject split audit: {audit_path}")
         elif args.datasets == "uci" and args.uci_protocol == "official_subject":
             fixed_validation_split = True

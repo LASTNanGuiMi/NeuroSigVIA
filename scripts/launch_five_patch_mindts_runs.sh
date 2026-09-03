@@ -77,7 +77,7 @@ done
     src/patch_mindts.py \
     src/medformer_graph/renderer.py \
     scripts/run_eeg_patch_mindts.sh \
-    scripts/run_aaai27_patch_mindts.sh \
+    scripts/run_wearable_patch_mindts.sh \
     scripts/run_logged_experiment.sh \
     scripts/launch_five_patch_mindts_runs.sh
 } > "$MANIFEST_PATH"
@@ -129,8 +129,8 @@ launch_job() {
 launch_job "pmrun_adftd_${SESSION_SUFFIX}" 0 adftd 8 scripts/run_eeg_patch_mindts.sh adftd
 launch_job "pmrun_tdbrain_${SESSION_SUFFIX}" 1 tdbrain 8 scripts/run_eeg_patch_mindts.sh tdbrain
 launch_job "pmrun_apava_${SESSION_SUFFIX}" 2 apava 8 scripts/run_eeg_patch_mindts.sh apava
-launch_job "pmrun_shimmer_${SESSION_SUFFIX}" 3 shimmer10 1 scripts/run_aaai27_patch_mindts.sh shimmer10
-launch_job "pmrun_pads_${SESSION_SUFFIX}" 4 pads11 4 scripts/run_aaai27_patch_mindts.sh pads11
+launch_job "pmrun_shimmer_${SESSION_SUFFIX}" 3 shimmer10 1 scripts/run_wearable_patch_mindts.sh shimmer10
+launch_job "pmrun_pads_${SESSION_SUFFIX}" 4 pads11 4 scripts/run_wearable_patch_mindts.sh pads11
 
 printf '\nActive sessions:\n'
 screen -ls

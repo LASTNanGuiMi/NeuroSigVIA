@@ -1,7 +1,7 @@
-# Selected dataset processing protocols
+# Wearable dataset processing protocols
 
-The two maintained clinical datasets are exposed below the project `data/`
-directory and launched through `scripts/run_selected_dataset.sh`.
+The two maintained clinical datasets are stored under `data/wearable/` and
+launched through `scripts/run_wearable_activity_graph.sh`.
 
 | Key | Dataset | Input tensor | Split | Labels | Normalization |
 |---|---|---|---|---|---|
@@ -21,14 +21,15 @@ Run examples:
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate neurosigvit
 cd NeuroSigViT-main
-DRY_RUN=1 bash scripts/run_selected_dataset.sh shimmer10
-DRY_RUN=1 bash scripts/run_selected_dataset.sh pads11
+DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh shimmer10
+DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
 ```
 
 Remove `DRY_RUN=1` only after checking GPU availability. `GPU`, `SEED`,
 `EPOCHS`, `PATIENCE`, `RESULT_DIR`, and `FEATURE_CACHE_DIR` can be overridden as
-environment variables. Additional `main.py` arguments can be appended after the
-dataset key.
+environment variables. Set `WEARABLE_DATA_ROOT` when the dataset parent is not
+`data/wearable/`. Additional `main.py` arguments can be appended after the dataset
+key.
 
 The commands assume the `neurosigvit` Conda environment described in
 `README.md`. If Miniconda is installed elsewhere, adjust only the first

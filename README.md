@@ -43,18 +43,22 @@ NeuroSigViT-main/
 |-- assets/
 |   `-- neurosigvit_method.jpg
 |-- data/
-|   |-- Neuro/AAAI_Data/
-|   |   |-- Shimmer_10_session10_AFC/
-|   |   `-- PADS_11_task08_TouchIndex/
+|   `-- wearable/
+|       |-- Shimmer_10_session10_AFC/
+|       `-- PADS_11_task08_TouchIndex/
 |-- data_loading/
 |   `-- split_reference_seed42.csv
 |-- scripts/
-|   |-- run_selected_dataset.sh
+|   |-- run_wearable_activity_graph.sh
 |   |-- run_med_activity_multimodal.sh
 |   |-- run_eeg_patch_mindts.sh
-|   |-- run_aaai27_patch_mindts.sh
+|   |-- run_wearable_patch_mindts.sh
 |   |-- run_shimmer_example.sh
 |   `-- run_pads_example.sh
+|-- reproduction/
+|   |-- prepare_assets.py
+|   |-- evaluate_checkpoint.py
+|   `-- verify_checkpoint_grid.py
 |-- DATA_PROCESSING.md
 |-- ANONYMITY.md
 |-- requirements.txt
@@ -85,8 +89,7 @@ The checked server environment uses Python 3.11, PyTorch 2.7.1, CUDA 12.6,
 
 ## Checkpoints
 
-The launcher accepts local checkpoint paths through `MODEL_DIR` and
-`MANTIS_DIR`:
+The launchers accept frozen encoder paths through `MODEL_DIR` and `MANTIS_DIR`:
 
 ```bash
 MODEL_DIR=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
@@ -96,6 +99,9 @@ MANTIS_DIR=/path/to/Mantis-8M
 The corresponding public models are
 [`laion/CLIP-ViT-H-14-laion2B-s32B-b79K`](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K)
 and [`paris-noah/Mantis-8M`](https://huggingface.co/paris-noah/Mantis-8M).
+Archived classifier checkpoints are optional for training. Use
+`reproduction/evaluate_checkpoint.py` only when verifying an archived model;
+the script creates a fresh feature cache from the selected data and encoders.
 
 ## Data sources
 
@@ -126,7 +132,7 @@ and test data.
 Run only this endpoint with:
 
 ```bash
-DRY_RUN=1 bash scripts/run_selected_dataset.sh pads11
+DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
 ```
 
 ## Running experiments
@@ -134,8 +140,8 @@ DRY_RUN=1 bash scripts/run_selected_dataset.sh pads11
 From the repository root, first print each command without starting training:
 
 ```bash
-DRY_RUN=1 bash scripts/run_selected_dataset.sh shimmer10
-DRY_RUN=1 bash scripts/run_selected_dataset.sh pads11
+DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh shimmer10
+DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
 ```
 
 Remove `DRY_RUN=1` only after checking GPU availability. The convenience
@@ -147,9 +153,9 @@ bash scripts/run_pads_example.sh
 ```
 
 `GPU`, `SEED`, `EPOCHS`, `PATIENCE`, `RESULT_DIR`, `FEATURE_CACHE_DIR`,
-`MODEL_DIR`, `MANTIS_DIR`, `DATA_DIR`, and `PYTHON_BIN` can be overridden as
-environment variables. Additional `main.py` arguments may follow the dataset
-key.
+`MODEL_DIR`, `MANTIS_DIR`, `DATA_DIR`, `WEARABLE_DATA_ROOT`, and `PYTHON_BIN`
+can be overridden as environment variables. Additional `main.py` arguments may
+follow the dataset key.
 
 ### TimeMosaic selector-only configuration
 
@@ -179,7 +185,7 @@ Set portable asset locations and launch one run from the repository root:
 
 ```bash
 export NEUROSIGVIT_EEG_ROOT=/path/to/data/eeg
-export NEUROSIGVIT_AAAI27_ROOT=/path/to/data/Neuro
+export NEUROSIGVIT_WEARABLE_ROOT=/path/to/data/wearable
 export NEUROSIGVIT_CLIP_PATH=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
 export NEUROSIGVIT_MANTIS_PATH=/path/to/Mantis-8M
 
@@ -210,7 +216,7 @@ and PADS launchers above remain available.
 | `run_selector_comparison.py` | Fixed five-dataset selector-only experiment configuration |
 | `scripts/run_med_activity_multimodal.sh` | MedActivity multimodal launcher |
 | `scripts/run_eeg_patch_mindts.sh` | EEG Patch-MindTS launcher |
-| `scripts/run_aaai27_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
+| `scripts/run_wearable_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
 
 See [MedActivity implementation notes](docs/MEDACTIVITY.md) for the image and
 feature layouts. The MedActivity launcher uses seed 42 by default; the original selected-dataset
@@ -227,10 +233,10 @@ benchmark results or establish equivalence between development and snapshot runs
 
 ```bash
 python -m compileall -q main.py src data_loading scripts selector_policies \
-  selector_host.py experiment_common.py run_selector_comparison.py
-bash -n scripts/run_selected_dataset.sh
+  reproduction selector_host.py experiment_common.py run_selector_comparison.py
+bash -n scripts/run_wearable_activity_graph.sh
 bash -n scripts/run_eeg_patch_mindts.sh
-bash -n scripts/run_aaai27_patch_mindts.sh
+bash -n scripts/run_wearable_patch_mindts.sh
 ```
 
 These checks verify that the published Python sources compile and the maintained

@@ -7,7 +7,7 @@ cd "$PROJECT_DIR"
 
 MODEL_DIR="${MODEL_DIR:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}"
 MANTIS_DIR="${MANTIS_DIR:-../Checkpoint/Checkpoint/models--paris-noah--Mantis-8M/snapshots/93a16a52a5e2e6d76c0b823533b5836dd83ca10a}"
-CLINICAL_DATA_DIR="${CLINICAL_DATA_DIR:-data}"
+WEARABLE_DATA_ROOT="${WEARABLE_DATA_ROOT:-data/wearable}"
 SHARED_DATA_DIR="${SHARED_DATA_DIR:-../../data}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
@@ -26,27 +26,27 @@ fi
 
 case "$DATASET_KEY" in
   shimmer10)
-    DATASET_GROUP="aaai27"
+    DATASET_GROUP="wearable"
     DATASET_NAME="Shimmer_10_session10_AFC"
-    DATA_DIR="$CLINICAL_DATA_DIR"
+    DATA_DIR="$WEARABLE_DATA_ROOT"
     PROTOCOL="shimmer_hc_vs_pd; subject_split_seed42"
-    dataset_args=(--aaai27_label_mode shimmer_hc_vs_pd)
+    dataset_args=(--wearable_label_mode shimmer_hc_vs_pd)
     required_data_paths=(
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Feature"
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Label/label.npy"
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Meta/subject_map.csv"
+      "$DATA_DIR/$DATASET_NAME/Feature"
+      "$DATA_DIR/$DATASET_NAME/Label/label.npy"
+      "$DATA_DIR/$DATASET_NAME/Meta/subject_map.csv"
     )
     ;;
   pads11)
-    DATASET_GROUP="aaai27"
+    DATASET_GROUP="wearable"
     DATASET_NAME="PADS_11_task08_TouchIndex"
-    DATA_DIR="$CLINICAL_DATA_DIR"
+    DATA_DIR="$WEARABLE_DATA_ROOT"
     PROTOCOL="pads_pd_vs_hc; subject_split_seed42"
-    dataset_args=(--aaai27_label_mode pads_pd_vs_hc)
+    dataset_args=(--wearable_label_mode pads_pd_vs_hc)
     required_data_paths=(
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Feature"
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Label/label.npy"
-      "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Meta/subject_map.csv"
+      "$DATA_DIR/$DATASET_NAME/Feature"
+      "$DATA_DIR/$DATASET_NAME/Label/label.npy"
+      "$DATA_DIR/$DATASET_NAME/Meta/subject_map.csv"
     )
     ;;
   ucihar)

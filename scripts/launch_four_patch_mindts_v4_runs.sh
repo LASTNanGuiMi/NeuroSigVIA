@@ -164,7 +164,7 @@ done
 dataset_launcher() {
   case "$1" in
     tdbrain|apava) printf '%s' "scripts/run_eeg_patch_mindts.sh" ;;
-    shimmer10|pads11) printf '%s' "scripts/run_aaai27_patch_mindts.sh" ;;
+    shimmer10|pads11) printf '%s' "scripts/run_wearable_patch_mindts.sh" ;;
   esac
 }
 
@@ -309,7 +309,7 @@ done
     src/patch_mindts.py \
     src/medformer_graph/renderer.py \
     scripts/run_eeg_patch_mindts.sh \
-    scripts/run_aaai27_patch_mindts.sh \
+    scripts/run_wearable_patch_mindts.sh \
     scripts/run_logged_experiment.sh \
     scripts/launch_four_patch_mindts_v4_runs.sh
 } > "$MANIFEST_PATH"

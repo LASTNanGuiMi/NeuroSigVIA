@@ -721,7 +721,7 @@ def parse_args():
             "flaap",
             "falltl",
             "feng",
-            "aaai27",
+            "wearable",
             "eeg",
         ],
         help="Time series classification benchmark",
@@ -759,7 +759,7 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--aaai27_label_mode",
+        "--wearable_label_mode",
         choices=[
             "original",
             "shimmer_hc_vs_pd",

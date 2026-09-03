@@ -8,6 +8,7 @@ cd "$PROJECT_DIR"
 MODEL_DIR="${MODEL_DIR:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}"
 MANTIS_DIR="${MANTIS_DIR:-../Checkpoint/Checkpoint/models--paris-noah--Mantis-8M/snapshots/93a16a52a5e2e6d76c0b823533b5836dd83ca10a}"
 DATA_DIR="${DATA_DIR:-$PROJECT_DIR/data}"
+WEARABLE_DATA_ROOT="${WEARABLE_DATA_ROOT:-$DATA_DIR/wearable}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 GPU="${GPU:-0}"
@@ -166,9 +167,9 @@ case "$DATASET_KEY" in
 esac
 BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
 
-RESULT_DIR="${RESULT_DIR:-results/aaai27_patch_mindts_${CANDIDATE_MODE}_${ROUTER_MODE}_seed${SEED}/${DATASET_KEY}}"
+RESULT_DIR="${RESULT_DIR:-results/wearable_patch_mindts_${CANDIDATE_MODE}_${ROUTER_MODE}_seed${SEED}/${DATASET_KEY}}"
 # Router-independent frozen features are intentionally shared by all router modes.
-FEATURE_CACHE_DIR="${FEATURE_CACHE_DIR:-feature_cache/aaai27_patch_mindts_${CANDIDATE_MODE}_seed${SEED}/${DATASET_KEY}}"
+FEATURE_CACHE_DIR="${FEATURE_CACHE_DIR:-feature_cache/wearable_patch_mindts_${CANDIDATE_MODE}_seed${SEED}/${DATASET_KEY}}"
 
 [[ "$GPU" =~ ^[0-9]+$ ]] || { echo "GPU must be non-negative" >&2; exit 1; }
 [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || { echo "BATCH_SIZE must be positive" >&2; exit 1; }
@@ -256,10 +257,10 @@ command=(
   --mlp_early_stop_ema_decay "$EARLY_STOP_EMA_DECAY"
   --mlp_early_stop_min_delta "$EARLY_STOP_MIN_DELTA"
   --batch_size "$BATCH_SIZE"
-  --data_dir "$DATA_DIR"
-  --datasets aaai27
+  --data_dir "$WEARABLE_DATA_ROOT"
+  --datasets wearable
   --dataset_names "$DATASET_NAME"
-  --aaai27_label_mode "$LABEL_MODE"
+  --wearable_label_mode "$LABEL_MODE"
   --random_seed "$SEED"
   --feature_cache_dir "$FEATURE_CACHE_DIR"
   --result_dir "$RESULT_DIR"
@@ -275,9 +276,9 @@ fi
 for path in \
   "$MODEL_DIR" \
   "$MANTIS_DIR" \
-  "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Feature" \
-  "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Label/label.npy" \
-  "$DATA_DIR/Neuro/AAAI_Data/$DATASET_NAME/Meta/subject_map.csv" \
+  "$WEARABLE_DATA_ROOT/$DATASET_NAME/Feature" \
+  "$WEARABLE_DATA_ROOT/$DATASET_NAME/Label/label.npy" \
+  "$WEARABLE_DATA_ROOT/$DATASET_NAME/Meta/subject_map.csv" \
   "data_loading/split_reference_seed42.csv"; do
   [[ -e "$path" ]] || { echo "Missing required path: $path" >&2; exit 1; }
 done

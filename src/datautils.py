@@ -79,7 +79,7 @@ UCI_HAR_ACC_GYRO_SIGNAL_FILES = [
 UCI_HAR_ACC_GYRO_INDICES = [6, 7, 8, 3, 4, 5]
 
 
-AAAI27_DATASET_NAMES = (
+WEARABLE_DATASET_NAMES = (
     "mPowerRest",
     "mPowerReturn",
     "mPowerOutbound",
@@ -90,7 +90,7 @@ AAAI27_DATASET_NAMES = (
     "Shimmer_11_session11_DRINK",
     "Shimmer_12_session12_PICK",
 )
-AAAI27_EXPECTED_SPLIT_SAMPLES = {
+WEARABLE_EXPECTED_SPLIT_SAMPLES = {
     "mPowerRest": (16124, 5399, 5368),
     "mPowerReturn": (9132, 2619, 2733),
     "mPowerOutbound": (15289, 5278, 5193),
@@ -101,7 +101,7 @@ AAAI27_EXPECTED_SPLIT_SAMPLES = {
     "Shimmer_11_session11_DRINK": (77, 25, 28),
     "Shimmer_12_session12_PICK": (65, 21, 25),
 }
-AAAI27_DYNAMIC_DATASET_SPECS = {
+WEARABLE_DYNAMIC_DATASET_SPECS = {
     "PADS_10_task07_CrossArms": {
         "sequence_length": 976,
         "label_names": {
@@ -135,10 +135,10 @@ AAAI27_DYNAMIC_DATASET_SPECS = {
         "expected_sample_count": 111,
     },
 }
-AAAI27_REFERENCE_DATASETS_SHA256 = (
+WEARABLE_REFERENCE_DATASETS_SHA256 = (
     "0113d69736e9678a43b8e2c62b344bb34e6776c023085f1a80e7e81b0a512092"
 )
-_AAAI27_MODULE_CACHE = {}
+_WEARABLE_MODULE_CACHE = {}
 
 
 EEG_MEDFORMER_DATASET_NAMES = ("TDBRAIN", "APAVA", "ADFTD")
@@ -226,7 +226,7 @@ EEG_MEDFORMER_SPECS = {
 
 
 @dataclass
-class AAAI27DataBundle:
+class WearableDataBundle:
     dataset_name: str
     data_root: Path
     reference_root: Path
@@ -1605,17 +1605,17 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
     return output_path
 
 
-def find_aaai27_data_root(data_dir, dataset_name):
-    if dataset_name not in AAAI27_DATASET_NAMES:
-        raise ValueError(f"Unsupported AAAI27 dataset: {dataset_name}")
+def find_wearable_data_root(data_dir, dataset_name):
+    if dataset_name not in WEARABLE_DATASET_NAMES:
+        raise ValueError(f"Unsupported wearable dataset: {dataset_name}")
 
     base = Path(data_dir).expanduser()
     candidates = (
         base,
-        base / "AAAI_Data",
-        base / "Neuro" / "AAAI_Data",
+        base / "wearable",
+        base / "Neuro" / "wearable",
         base / "Neuro",
-        base / "med_data" / "AAAI_Data",
+        base / "med_data" / "wearable",
         base / "med_data",
     )
     seen = set()
@@ -1632,12 +1632,12 @@ def find_aaai27_data_root(data_dir, dataset_name):
         return normalized
 
     raise FileNotFoundError(
-        f"Could not find AAAI_Data/{dataset_name} below {data_dir!r}. "
+        f"Could not find wearable/{dataset_name} below {data_dir!r}. "
         "Expected the dataset Feature/ and Meta/subject_map.csv files."
     )
 
 
-def _find_aaai27_reference_root(data_root):
+def _find_wearable_reference_root(data_root):
     candidates = (
         Path(data_root) / "data_loading",
         Path(__file__).resolve().parents[1] / "data_loading",
@@ -1649,29 +1649,29 @@ def _find_aaai27_reference_root(data_root):
         ):
             return candidate
     raise FileNotFoundError(
-        "Missing AAAI27 reference loader and split file. Expected "
+        "Missing wearable reference loader and split file. Expected "
         "data_loading/datasets.py and data_loading/split_reference_seed42.csv "
         "either beside the dataset root or in the repository."
     )
 
 
-def _load_aaai27_reference(reference_root):
+def _load_wearable_reference(reference_root):
     module_path = Path(reference_root) / "datasets.py"
     digest = hashlib.sha256(module_path.read_bytes()).hexdigest()
-    if digest != AAAI27_REFERENCE_DATASETS_SHA256:
+    if digest != WEARABLE_REFERENCE_DATASETS_SHA256:
         raise ValueError(
             f"Unexpected SHA-256 for {module_path}: {digest}. "
-            f"Expected {AAAI27_REFERENCE_DATASETS_SHA256}."
+            f"Expected {WEARABLE_REFERENCE_DATASETS_SHA256}."
         )
 
     cache_key = str(module_path.resolve())
-    if cache_key in _AAAI27_MODULE_CACHE:
-        return _AAAI27_MODULE_CACHE[cache_key]
+    if cache_key in _WEARABLE_MODULE_CACHE:
+        return _WEARABLE_MODULE_CACHE[cache_key]
 
-    module_name = f"_aaai27_reference_{digest[:12]}"
+    module_name = f"_wearable_reference_{digest[:12]}"
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load AAAI27 reference module: {module_path}")
+        raise ImportError(f"Could not load wearable reference module: {module_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     try:
@@ -1679,13 +1679,13 @@ def _load_aaai27_reference(reference_root):
     except Exception:
         sys.modules.pop(module_name, None)
         raise
-    _AAAI27_MODULE_CACHE[cache_key] = module
+    _WEARABLE_MODULE_CACHE[cache_key] = module
     return module
 
 
-def _make_aaai27_tensor_loader(source_dataset, batch_size):
+def _make_wearable_tensor_loader(source_dataset, batch_size):
     if source_dataset.X is None or source_dataset.y is None:
-        raise ValueError("AAAI27 source dataset did not load samples")
+        raise ValueError("Wearable source dataset did not load samples")
 
     # The reference interface is [N,T,6]; NeuroSigViT consumes [N,6,T].
     inputs = torch.from_numpy(source_dataset.X.transpose(0, 2, 1))
@@ -1702,7 +1702,7 @@ def _make_aaai27_tensor_loader(source_dataset, batch_size):
     return loader, labels
 
 
-def _standardize_aaai27_bundle_from_train(bundle, batch_size):
+def _standardize_wearable_bundle_from_train(bundle, batch_size):
     """Standardize selected task channels with training-split statistics only."""
     train_data = bundle.train_loader.dataset.tensors[0]
     mean = train_data.mean(dim=(0, 2), keepdim=True)
@@ -1727,7 +1727,7 @@ def _standardize_aaai27_bundle_from_train(bundle, batch_size):
         )
 
 
-def _apply_aaai27_label_protocol(bundle, label_mode, batch_size):
+def _apply_wearable_label_protocol(bundle, label_mode, batch_size):
     family = "shimmer" if bundle.dataset_name.startswith("Shimmer_") else "pads"
     protocols = {
         "shimmer_hc_vs_pd": ("shimmer", {0: 0, 1: 1, 2: 1}),
@@ -1740,7 +1740,7 @@ def _apply_aaai27_label_protocol(bundle, label_mode, batch_size):
         mapping = {int(label): int(label) for label in labels}
     else:
         if label_mode not in protocols:
-            raise ValueError(f"Unsupported AAAI27 label mode: {label_mode}")
+            raise ValueError(f"Unsupported wearable label mode: {label_mode}")
         expected_family, mapping = protocols[label_mode]
         if family != expected_family:
             raise ValueError(
@@ -1784,7 +1784,7 @@ def _apply_aaai27_label_protocol(bundle, label_mode, batch_size):
     bundle.label_mapping = mapping
 
 
-def _validate_aaai27_bundle(bundle, reference_module):
+def _validate_wearable_bundle(bundle, reference_module):
     reference_csv = bundle.reference_root / "split_reference_seed42.csv"
     reference = reference_module._read_reference_csv(reference_csv)
     reference_status = "NOT_AVAILABLE"
@@ -1833,7 +1833,7 @@ def _validate_aaai27_bundle(bundle, reference_module):
         split_sample_counts.append(len(source_dataset))
 
     actual_split_samples = tuple(split_sample_counts)
-    expected_split_samples = AAAI27_EXPECTED_SPLIT_SAMPLES[bundle.dataset_name]
+    expected_split_samples = WEARABLE_EXPECTED_SPLIT_SAMPLES[bundle.dataset_name]
     if actual_split_samples != expected_split_samples:
         raise AssertionError(
             f"{bundle.dataset_name}: expected train/vali/test samples "
@@ -1849,15 +1849,15 @@ def _validate_aaai27_bundle(bundle, reference_module):
     return reference_status
 
 
-def get_aaai27_dataloaders(dataset_name, args):
-    data_root = find_aaai27_data_root(args.data_dir, dataset_name)
-    reference_root = _find_aaai27_reference_root(data_root)
-    reference_module = _load_aaai27_reference(reference_root)
+def get_wearable_dataloaders(dataset_name, args):
+    data_root = find_wearable_data_root(args.data_dir, dataset_name)
+    reference_root = _find_wearable_reference_root(data_root)
+    reference_module = _load_wearable_reference(reference_root)
     dataset_classes = {
         dataset_class.dataset_name: dataset_class
         for dataset_class in reference_module.DATASET_CLASSES
     }
-    for dynamic_name, spec in AAAI27_DYNAMIC_DATASET_SPECS.items():
+    for dynamic_name, spec in WEARABLE_DYNAMIC_DATASET_SPECS.items():
         dataset_classes[dynamic_name] = type(
             f"{dynamic_name}Dataset",
             (reference_module.SubjectMapDataset,),
@@ -1878,16 +1878,16 @@ def get_aaai27_dataloaders(dataset_name, args):
         )
         for split in ("train", "vali", "test")
     }
-    train_loader, train_labels = _make_aaai27_tensor_loader(
+    train_loader, train_labels = _make_wearable_tensor_loader(
         split_datasets["train"], args.batch_size
     )
-    vali_loader, vali_labels = _make_aaai27_tensor_loader(
+    vali_loader, vali_labels = _make_wearable_tensor_loader(
         split_datasets["vali"], args.batch_size
     )
-    test_loader, test_labels = _make_aaai27_tensor_loader(
+    test_loader, test_labels = _make_wearable_tensor_loader(
         split_datasets["test"], args.batch_size
     )
-    bundle = AAAI27DataBundle(
+    bundle = WearableDataBundle(
         dataset_name=dataset_name,
         data_root=data_root,
         reference_root=reference_root,
@@ -1901,11 +1901,11 @@ def get_aaai27_dataloaders(dataset_name, args):
         vali_dataset=split_datasets["vali"],
         test_dataset=split_datasets["test"],
     )
-    reference_status = _validate_aaai27_bundle(bundle, reference_module)
+    reference_status = _validate_wearable_bundle(bundle, reference_module)
 
-    label_mode = getattr(args, "aaai27_label_mode", "original")
-    _apply_aaai27_label_protocol(bundle, label_mode, args.batch_size)
-    _standardize_aaai27_bundle_from_train(bundle, args.batch_size)
+    label_mode = getattr(args, "wearable_label_mode", "original")
+    _apply_wearable_label_protocol(bundle, label_mode, args.batch_size)
+    _standardize_wearable_bundle_from_train(bundle, args.batch_size)
 
     split_distributions = []
     for split, labels in (
@@ -1919,7 +1919,7 @@ def get_aaai27_dataloaders(dataset_name, args):
         )
         split_distributions.append(f"{split}=[{distribution}]")
     print(
-        f"AAAI27 {dataset_name}: "
+        f"Wearable {dataset_name}: "
         f"train={len(bundle.train_labels)}, vali={len(bundle.vali_labels)}, "
         f"test={len(bundle.test_labels)}; "
         f"label_mode={label_mode}; {' '.join(split_distributions)}; "
@@ -1928,7 +1928,7 @@ def get_aaai27_dataloaders(dataset_name, args):
     return bundle
 
 
-def write_aaai27_split_audit(bundle, result_dir):
+def write_wearable_split_audit(bundle, result_dir):
     split_dir = Path(result_dir) / "splits"
     split_dir.mkdir(parents=True, exist_ok=True)
     output_path = split_dir / f"{bundle.dataset_name}_subject_split.csv"

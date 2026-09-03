@@ -6,8 +6,8 @@ public source remains portable:
 
 ``NEUROSIGVIT_EEG_ROOT``
     Directory containing the processed ADFTD, TDBRAIN, and APAVA bundles.
-``NEUROSIGVIT_AAAI27_ROOT``
-    Directory containing the ``AAAI_Data`` folder for Shimmer10 and PADS11.
+``NEUROSIGVIT_WEARABLE_ROOT``
+    Directory containing the Shimmer10 and PADS11 dataset directories.
 ``NEUROSIGVIT_CLIP_PATH``
     Local CLIP-ViT-H-14 checkpoint directory.
 ``NEUROSIGVIT_MANTIS_PATH``
@@ -19,10 +19,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 from torch.utils.data import DataLoader,TensorDataset
-from src.datautils import get_eeg_medformer_dataloaders,get_aaai27_dataloaders
+from src.datautils import get_eeg_medformer_dataloaders,get_wearable_dataloaders
 ROOT=Path(__file__).resolve().parent
 EEG_ROOT=Path(os.environ.get('NEUROSIGVIT_EEG_ROOT',ROOT/'data'/'eeg')).expanduser()
-AAAI27_ROOT=Path(os.environ.get('NEUROSIGVIT_AAAI27_ROOT',ROOT/'data'/'Neuro')).expanduser()
+WEARABLE_ROOT=Path(os.environ.get('NEUROSIGVIT_WEARABLE_ROOT',ROOT/'data'/'wearable')).expanduser()
 VISION_PATH=Path(os.environ.get(
     'NEUROSIGVIT_CLIP_PATH',ROOT/'pretrained'/'CLIP-ViT-H-14-laion2B-s32B-b79K'
 )).expanduser()
@@ -31,8 +31,8 @@ MANTIS_PATH=Path(os.environ.get(
 )).expanduser()
 
 DATASETS={'adftd':('ADFTD','eeg',None,8),'tdbrain':('TDBRAIN','eeg',None,8),
- 'apava':('APAVA','eeg',None,8),'shimmer10':('Shimmer_10_session10_AFC','aaai27','shimmer_hc_vs_pd',1),
- 'pads11':('PADS_11_task08_TouchIndex','aaai27','pads_pd_vs_hc',4)}
+ 'apava':('APAVA','eeg',None,8),'shimmer10':('Shimmer_10_session10_AFC','wearable','shimmer_hc_vs_pd',1),
+ 'pads11':('PADS_11_task08_TouchIndex','wearable','pads_pd_vs_hc',4)}
 
 def write_json(path,value):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
@@ -64,7 +64,7 @@ def load_data(key,smoke=False):
         if kind=='eeg':
             bundle=get_eeg_medformer_dataloaders(name,SimpleNamespace(data_dir=str(EEG_ROOT),batch_size=batch))
         else:
-            bundle=get_aaai27_dataloaders(name,SimpleNamespace(data_dir=str(AAAI27_ROOT),batch_size=batch,aaai27_label_mode=mode))
+            bundle=get_wearable_dataloaders(name,SimpleNamespace(data_dir=str(WEARABLE_ROOT),batch_size=batch,wearable_label_mode=mode))
     if smoke:
         for split in ('train','vali','test'):
             old=getattr(bundle,split+'_loader'); labels=getattr(bundle,split+'_labels')
