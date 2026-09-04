@@ -6,9 +6,11 @@ signals are routed and rendered by
 The resulting Activity Graph keeps a small spatial token grid so a pooled
 line-plot token can act as a genuine query over multiple graph keys/values.
 
-The final temporal/visual classifier intentionally remains the compact
-``concat -> MLP`` path used by the controlled NeuroSigViT protocol.  The
-cross-attention in this file only fuses the two visual views.
+The final temporal/visual classifier reuses NeuroSigViT's existing
+``concat_attn`` interaction: project the visual and temporal branches, apply
+self-attention over the two branch tokens, flatten the attended tokens, and
+pass that representation to the classifier MLP.  The Line-Q/Graph-KV
+cross-attention in this file remains responsible only for the two visual views.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from src.medformer_graph.timemosaic_adaptive import (
     ADAPTATION_VERSION,
     TimeMosaicRegionGate,
 )
+from src.mlp_classifier import FusionModule
 from src.patch_mindts import (
     ChannelAttentionPool,
     MaskedIntraSampleInfoNCE,
@@ -35,7 +38,7 @@ from src.patch_mindts import (
 
 OPENCLIP_SPATIAL_GRID_SIZE = 4
 OPENCLIP_SPATIAL_TOKEN_COUNT = OPENCLIP_SPATIAL_GRID_SIZE**2
-TIMEMOSAIC_PATCH_PIPELINE_VERSION = "timemosaic_patch_pipeline_v1"
+TIMEMOSAIC_PATCH_PIPELINE_VERSION = "timemosaic_patch_pipeline_concat_attn_v2"
 
 
 def compress_openclip_spatial_tokens(
@@ -124,8 +127,9 @@ class TimeMosaicPatchFusionModule(nn.Module):
 
     The line token is the query and graph spatial tokens are keys/values.  The
     resulting visual token is aligned with the channel-pooled Mantis token by
-    symmetric within-sample InfoNCE.  Classification uses a separate
-    ``concat -> MLP`` representation followed by valid-duration pooling.
+    symmetric within-sample InfoNCE.  Classification uses the repository's
+    existing ``concat_attn`` interaction followed by valid-duration pooling
+    and an MLP head.
     """
 
     def __init__(
@@ -214,16 +218,19 @@ class TimeMosaicPatchFusionModule(nn.Module):
             projection_dim=alignment_dim,
             temperature=alignment_temperature,
         )
-        self.patch_fusion = nn.Sequential(
-            nn.LayerNorm(2 * fusion_dim),
-            nn.Linear(2 * fusion_dim, fusion_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(fusion_dim, fusion_dim),
-            nn.LayerNorm(fusion_dim),
+        # Reuse the exact concat_attn semantics of the legacy MLP path:
+        # branch-specific projections -> two-token self-attention -> flatten.
+        # The branch order matches the historical feature extractor, where
+        # visual branches precede the Mantis branch.
+        self.temporal_visual_fusion = FusionModule(
+            branch_dims=[fusion_dim, fusion_dim],
+            modal_interaction="concat_attn",
+            fusion_dim=fusion_dim,
+            fusion_heads=fusion_heads,
+            branch_names=["cross_attention_visual", "mantis_temporal"],
         )
         self.classifier = _MLPHead(
-            input_dim=fusion_dim,
+            input_dim=self.temporal_visual_fusion.output_dim,
             hidden_dim=classifier_hidden_dim,
             num_layers=classifier_num_layers,
             dropout=dropout,
@@ -260,7 +267,14 @@ class TimeMosaicPatchFusionModule(nn.Module):
             "visual_token_count": OPENCLIP_SPATIAL_TOKEN_COUNT,
             "temporal_pooling": "trainable_mantis_channel_attention",
             "alignment": "symmetric_intra_sample_patch_infonce",
-            "temporal_visual_fusion": "concat_mlp",
+            "temporal_visual_fusion": "concat_attn",
+            "temporal_visual_fusion_semantics": (
+                "branch_projection_then_two_token_self_attention_then_flatten"
+            ),
+            "temporal_visual_branch_order": [
+                "cross_attention_visual",
+                "mantis_temporal",
+            ],
             "sample_pooling": "valid_fraction_weighted_mean",
         }
 
@@ -431,13 +445,30 @@ class TimeMosaicPatchFusionModule(nn.Module):
             mask,
             valid_fraction=fractions,
         )
-        patch_features = self.patch_fusion(
-            torch.cat([temporal_tokens, visual_tokens], dim=-1)
+        batch_size, patch_count, _ = visual_tokens.shape
+        flat_mask = mask.reshape(-1)
+        valid_indices = flat_mask.nonzero(as_tuple=False).squeeze(1)
+        flat_visual = visual_tokens.reshape(batch_size * patch_count, -1)
+        flat_temporal = temporal_tokens.reshape(batch_size * patch_count, -1)
+        valid_patch_features = self.temporal_visual_fusion(
+            [
+                flat_visual.index_select(0, valid_indices),
+                flat_temporal.index_select(0, valid_indices),
+            ]
         )
-        patch_features = torch.where(
-            mask.unsqueeze(-1),
-            patch_features,
-            torch.zeros_like(patch_features),
+        flat_patch_features = valid_patch_features.new_zeros(
+            batch_size * patch_count,
+            self.temporal_visual_fusion.output_dim,
+        )
+        flat_patch_features = flat_patch_features.index_copy(
+            0,
+            valid_indices,
+            valid_patch_features,
+        )
+        patch_features = flat_patch_features.reshape(
+            batch_size,
+            patch_count,
+            self.temporal_visual_fusion.output_dim,
         )
         sample_features = valid_fraction_weighted_pool(
             patch_features,

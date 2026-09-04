@@ -112,10 +112,12 @@ the script creates a fresh feature cache from the selected data and encoders.
 
 The current path writes `timemosaic_graph_checkpoint.pt`. It contains the
 adaptive region gate, line-query/graph-key-value cross-attention, temporal
-fusion module, and classifier head. It intentionally does not contain the
-frozen OpenCLIP or Mantis weights, so those two encoders must be available when
-the checkpoint is used. A checkpoint from the archived post-encoding selector
-has a different architecture and cannot be substituted for this file.
+`concat_attn` fusion module, and classifier head. It intentionally does not
+contain the frozen OpenCLIP or Mantis weights, so those two encoders must be
+available when the checkpoint is used. A checkpoint from the archived
+post-encoding selector has a different architecture and cannot be substituted
+for this file. The earlier pre-render `concat_mlp` checkpoint schema is also
+incompatible with the current `concat_attn` model and must be retrained.
 
 ## Data sources
 
@@ -168,8 +170,11 @@ sequence:
 4. Encode the raw window with frozen Mantis. Apply symmetric within-sample
    `N x N` InfoNCE between the fused visual patch features and temporal patch
    features.
-5. Concatenate the same visual and temporal patch features, then use an MLP
-   for classification; the InfoNCE branch acts as a training objective.
+5. Project the same visual and temporal patch features to two branch tokens,
+   apply multi-head self-attention over them, flatten the attended tokens, and
+   perform valid-window pooling before the classifier MLP. This is the
+   repository's existing `concat_attn` interaction; the InfoNCE branch remains
+   a training objective.
 
 Only the region classifier and hard Gumbel selection pattern are adapted from
 TimeMosaic's
@@ -206,7 +211,7 @@ reserve a GPU; `GPU` is passed to
 `CUDA_VISIBLE_DEVICES`. Extra `main.py` arguments may follow the dataset key.
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
-Mantis patch alignment, and concatenation followed by an MLP.
+Mantis patch alignment, and final visual-Mantis `concat_attn` fusion.
 
 This path is selected only by
 `--modal_interaction patch_timemosaic_graph`. Do not add
@@ -296,7 +301,7 @@ and PADS launchers above remain available.
 | --- | --- |
 | `src/medformer_graph/timemosaic_adaptive.py` | Pre-render 4/8/16 region gate and differentiable adaptive Activity Graph renderer |
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
-| `src/timemosaic_patch_pipeline.py` | Visual-temporal InfoNCE and final concatenation/MLP fusion |
+| `src/timemosaic_patch_pipeline.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/timemosaic_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
 | `scripts/run_timemosaic_graph.sh` | Portable five-dataset launcher for the current method |
 | `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |

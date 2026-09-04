@@ -63,8 +63,10 @@ from src.utils import get_split, set_random_seed
 
 TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION = 1
 TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE = "timemosaic_adaptive_graph_static_v1"
-TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION = 1
-TIMEMOSAIC_GRAPH_ARCHITECTURE = "timemosaic_adaptive_graph_crossattn_v1"
+TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION = 2
+TIMEMOSAIC_GRAPH_ARCHITECTURE = (
+    "timemosaic_adaptive_graph_crossattn_concatattn_v2"
+)
 
 TIMEMOSAIC_GRAPH_STATIC_KEYS = (
     "raw_windows",
@@ -1302,6 +1304,14 @@ def _save_checkpoint(
             "mantis_encoder_parameters_included": False,
             "line_and_mantis_features_cached": True,
             "activity_graph_generated_online": True,
+            "temporal_visual_fusion": "concat_attn",
+            "temporal_visual_fusion_semantics": (
+                "branch_projection_then_two_token_self_attention_then_flatten"
+            ),
+            "temporal_visual_branch_order": [
+                "cross_attention_visual",
+                "mantis_temporal",
+            ],
             "alignment_weight": float(alignment_weight),
             "selector_balance_weight": float(selector_balance_weight),
         },

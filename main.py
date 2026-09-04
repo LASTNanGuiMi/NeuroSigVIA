@@ -826,10 +826,19 @@ if __name__ == "__main__":
                 "alignment_dim": args.patch_alignment_dim,
                 "alignment_temperature": args.patch_alignment_temperature,
                 "alignment_weight": args.patch_alignment_weight,
-                "temporal_visual_fusion": "concat_mlp",
+                "temporal_visual_fusion": "concat_attn",
+                "temporal_visual_fusion_semantics": (
+                    "branch_projection_then_two_token_self_attention_then_"
+                    "flatten"
+                ),
+                "temporal_visual_branch_order": [
+                    "cross_attention_visual",
+                    "mantis_temporal",
+                ],
                 "patch_pooling": "valid_fraction_weighted_mean_v1",
                 "checkpoint_metric": args.patch_checkpoint_metric,
                 "historical_checkpoint_compatible": False,
+                "previous_concat_mlp_checkpoint_compatible": False,
                 "historical_path": "patch_mindts",
             }
         )

@@ -629,7 +629,8 @@ def parse_args():
             "How to fuse branch embeddings in the MLP path. "
             "patch_mindts retains the historical post-encoding selector; "
             "patch_timemosaic_graph selects 4/8/16 while constructing one "
-            "Activity Graph, then applies Line-Q/Graph-KV cross-attention."
+            "Activity Graph, applies Line-Q/Graph-KV cross-attention, and "
+            "uses concat_attn for final visual-Mantis fusion."
         ),
     )
 
