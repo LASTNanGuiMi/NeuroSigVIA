@@ -622,9 +622,15 @@ def parse_args():
             "cross_attn_gate",
             "masked_pretrain",
             "patch_mindts",
+            "patch_timemosaic_graph",
         ],
         default="concat",
-        help="How to fuse branch embeddings in the MLP path",
+        help=(
+            "How to fuse branch embeddings in the MLP path. "
+            "patch_mindts retains the historical post-encoding selector; "
+            "patch_timemosaic_graph selects 4/8/16 while constructing one "
+            "Activity Graph, then applies Line-Q/Graph-KV cross-attention."
+        ),
     )
 
     parser.add_argument(
@@ -673,6 +679,52 @@ def parse_args():
             "Micro-batch size for frozen line/Activity-Graph image encoding in "
             "patch_mindts"
         ),
+    )
+
+    parser.add_argument(
+        "--timemosaic_gate_temperature",
+        type=float,
+        default=0.5,
+        help=(
+            "Training temperature of the hard straight-through TimeMosaic-style "
+            "4/8/16 region gate used by patch_timemosaic_graph"
+        ),
+    )
+
+    parser.add_argument(
+        "--timemosaic_selector_balance_weight",
+        type=float,
+        default=0.001,
+        help=(
+            "Weight of the train-split gate-usage balance term in "
+            "patch_timemosaic_graph"
+        ),
+    )
+
+    parser.add_argument(
+        "--timemosaic_graph_token_grid",
+        type=int,
+        default=4,
+        help=(
+            "Side length of the retained Activity Graph spatial-token grid; "
+            "the default 4 keeps 16 K/V tokens"
+        ),
+    )
+
+    parser.add_argument(
+        "--timemosaic_gate_checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "Optional trusted checkpoint containing TimeMosaic region_cls "
+            "weights. Omit to train the gate jointly."
+        ),
+    )
+
+    parser.add_argument(
+        "--timemosaic_freeze_gate",
+        action="store_true",
+        help="Freeze a loaded TimeMosaic region gate during classifier training",
     )
 
     parser.add_argument(
@@ -1161,6 +1213,27 @@ def parse_args():
         parser.error("--patch_alignment_weight must be finite and non-negative")
     if args.visual_encode_batch_size <= 0:
         parser.error("--visual_encode_batch_size must be positive")
+    if (
+        not math.isfinite(args.timemosaic_gate_temperature)
+        or args.timemosaic_gate_temperature <= 0.0
+    ):
+        parser.error("--timemosaic_gate_temperature must be positive and finite")
+    if (
+        not math.isfinite(args.timemosaic_selector_balance_weight)
+        or args.timemosaic_selector_balance_weight < 0.0
+    ):
+        parser.error(
+            "--timemosaic_selector_balance_weight must be finite and non-negative"
+        )
+    if args.timemosaic_graph_token_grid < 2:
+        parser.error(
+            "--timemosaic_graph_token_grid must be at least 2 so cross-attention "
+            "has more than one graph K/V token"
+        )
+    if args.timemosaic_freeze_gate and not args.timemosaic_gate_checkpoint:
+        parser.error(
+            "--timemosaic_freeze_gate requires --timemosaic_gate_checkpoint"
+        )
     if args.med_activity_adaptive_granularity:
         if args.image_mode != "med_activity_graph":
             parser.error(
@@ -1268,6 +1341,71 @@ def parse_args():
         if args.fusion_dim % args.fusion_heads != 0:
             parser.error(
                 "--fusion_dim must be divisible by --fusion_heads in patch_mindts"
+            )
+    if args.modal_interaction == "patch_timemosaic_graph":
+        if args.classifier_type != "mlp":
+            parser.error(
+                "--modal_interaction patch_timemosaic_graph requires "
+                "--classifier_type mlp"
+            )
+        if args.image_mode != "med_activity_graph":
+            parser.error(
+                "--modal_interaction patch_timemosaic_graph requires "
+                "--image_mode med_activity_graph"
+            )
+        if args.aggregation not in {"mean", "cls_token"}:
+            parser.error(
+                "patch_timemosaic_graph requires --aggregation mean or cls_token"
+            )
+        if args.med_activity_adaptive_granularity:
+            parser.error(
+                "patch_timemosaic_graph performs its own pre-render selection; "
+                "do not enable the historical --med_activity_adaptive_granularity bank"
+            )
+        if not args.vit_1_name:
+            parser.error(
+                "--modal_interaction patch_timemosaic_graph requires --vit_1_name"
+            )
+        if args.vit_1_layer is None or (
+            args.vit_1_layer != -1 and args.vit_1_layer <= 0
+        ):
+            parser.error(
+                "patch_timemosaic_graph requires --vit_1_layer to be a positive "
+                "integer or -1"
+            )
+        if args.vit_2_name:
+            parser.error(
+                "patch_timemosaic_graph uses one shared visual encoder; "
+                "--vit_2_name is not supported"
+            )
+        if not args.mantis:
+            parser.error("patch_timemosaic_graph requires --mantis")
+        if args.moment:
+            parser.error("patch_timemosaic_graph does not use MOMENT")
+        if args.outer_patch_size != 64:
+            parser.error(
+                "patch_timemosaic_graph currently defines each outer window as "
+                "exactly 64 samples"
+            )
+        if args.timemosaic_graph_token_grid != 4:
+            parser.error(
+                "patch_timemosaic_graph currently fixes the retained graph token "
+                "grid at 4x4 (16 K/V tokens)"
+            )
+        if args.outer_patch_stride > args.outer_patch_size:
+            parser.error(
+                "--outer_patch_stride cannot exceed --outer_patch_size because "
+                "that would leave time points uncovered"
+            )
+        if args.fusion_dim <= 0 or args.fusion_heads <= 0:
+            parser.error(
+                "--fusion_dim and --fusion_heads must be positive in "
+                "patch_timemosaic_graph"
+            )
+        if args.fusion_dim % args.fusion_heads != 0:
+            parser.error(
+                "--fusion_dim must be divisible by --fusion_heads in "
+                "patch_timemosaic_graph"
             )
     if args.falltl_target_length <= 0:
         parser.error("--falltl_target_length must be positive")

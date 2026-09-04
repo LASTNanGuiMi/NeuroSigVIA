@@ -60,6 +60,10 @@ from src.patch_mindts import (
     PATCH_MINDTS_ARCHITECTURE,
     train_patch_mindts_classifier,
 )
+from src.timemosaic_graph_training import (
+    TIMEMOSAIC_GRAPH_ARCHITECTURE,
+    train_timemosaic_graph_classifier,
+)
 from src.privacy import anonymize_runtime_arguments, anonymize_runtime_value
 from src.utils import (
     get_patch_size,
@@ -443,6 +447,34 @@ def _patch_feature_extractor_code_identity():
 
 
 @lru_cache(maxsize=1)
+def _timemosaic_feature_extractor_code_identity():
+    """Hash the corrected pre-render TimeMosaic graph feature path."""
+    project_root = Path(__file__).resolve().parent
+    source_paths = (
+        Path("src/neurosigvit.py"),
+        Path("src/utils.py"),
+        Path("src/patch_mindts.py"),
+        Path("src/line_graph_cross_attention.py"),
+        Path("src/timemosaic_patch_pipeline.py"),
+        Path("src/timemosaic_graph_training.py"),
+        Path("src/medformer_graph/renderer.py"),
+        Path("src/medformer_graph/timemosaic_adaptive.py"),
+    )
+    manifest = hashlib.sha256()
+    components = {}
+    for relative_path in source_paths:
+        digest = _full_file_digest(project_root / relative_path)
+        relative = relative_path.as_posix()
+        components[relative] = digest
+        manifest.update(relative.encode("utf-8"))
+        manifest.update(digest.encode("ascii"))
+    return {
+        "manifest_sha256": manifest.hexdigest(),
+        "components": components,
+    }
+
+
+@lru_cache(maxsize=1)
 def _feature_runtime_identity():
     packages = {}
     for package in (
@@ -479,7 +511,11 @@ def build_feature_cache_signature(
         getattr(args, "med_activity_adaptive_granularity", False)
     )
     patch_mindts = getattr(args, "modal_interaction", None) == "patch_mindts"
-    if adaptive_granularity and any(
+    timemosaic_graph = (
+        getattr(args, "modal_interaction", None) == "patch_timemosaic_graph"
+    )
+    integrity_hashed_features = adaptive_granularity or timemosaic_graph
+    if integrity_hashed_features and any(
         identity is None
         for identity in (
             split_input_identity,
@@ -491,7 +527,7 @@ def build_feature_cache_signature(
             "Adaptive feature-cache signatures require split input, feature "
             "code, and runtime identities."
         )
-    if adaptive_granularity:
+    if integrity_hashed_features:
         checkpoint_paths = {
             "vit_1_name": args.vit_1_name,
             "vit_2_name": args.vit_2_name,
@@ -523,7 +559,15 @@ def build_feature_cache_signature(
     configuration = {
         # Fixed-mode signatures intentionally remain schema 5 so existing
         # frozen-feature caches continue to match bit for bit.
-        "schema": 9 if patch_mindts else 7 if adaptive_granularity else 5,
+        "schema": (
+            10
+            if timemosaic_graph
+            else 9
+            if patch_mindts
+            else 7
+            if adaptive_granularity
+            else 5
+        ),
         "dataset_group": args.datasets,
         "dataset": dataset,
         "dataset_names": args.dataset_names,
@@ -544,14 +588,20 @@ def build_feature_cache_signature(
         "max_windows_per_file": args.max_windows_per_file,
         "image_mode": args.image_mode,
         "med_activity_patch_lengths": (
-            None if patch_mindts else args.med_activity_patch_lengths
+            None
+            if patch_mindts or timemosaic_graph
+            else args.med_activity_patch_lengths
         ),
         "med_activity_channel_mix": args.med_activity_channel_mix,
         "med_activity_router_temperature": (
-            None if patch_mindts else args.med_activity_router_temperature
+            None
+            if patch_mindts or timemosaic_graph
+            else args.med_activity_router_temperature
         ),
         "med_activity_router_mix": (
-            None if patch_mindts else args.med_activity_router_mix
+            None
+            if patch_mindts or timemosaic_graph
+            else args.med_activity_router_mix
         ),
         "aggregation": args.aggregation,
         "patch_size": patch_size,
@@ -559,13 +609,13 @@ def build_feature_cache_signature(
         "vit_1_name": anonymize_runtime_value(args.vit_1_name),
         "vit_1_identity": _checkpoint_identity(
             args.vit_1_name,
-            "full" if adaptive_granularity else "sampled",
+            "full" if integrity_hashed_features else "sampled",
         ),
         "vit_1_layer": args.vit_1_layer,
         "vit_2_name": anonymize_runtime_value(args.vit_2_name),
         "vit_2_identity": _checkpoint_identity(
             args.vit_2_name,
-            "full" if adaptive_granularity else "sampled",
+            "full" if integrity_hashed_features else "sampled",
         ),
         "vit_2_layer": args.vit_2_layer,
         "mantis_name": (
@@ -574,14 +624,41 @@ def build_feature_cache_signature(
         "mantis_identity": (
             _checkpoint_identity(
                 args.mantis_name,
-                "full" if adaptive_granularity else "sampled",
+                "full" if integrity_hashed_features else "sampled",
             )
             if args.mantis
             else None
         ),
         "moment": args.moment,
     }
-    if patch_mindts:
+    if timemosaic_graph:
+        configuration.update(
+            {
+                "feature_layout": "raw_windows_line_mantis_v1",
+                "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+                "outer_patch_size": args.outer_patch_size,
+                "outer_patch_stride": args.outer_patch_stride,
+                "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
+                "line_plot_layout": "stacked_channel_lanes_v1",
+                "activity_graph_selection": (
+                    "raw_region_16_hard_st_4_8_16_before_graph_propagation"
+                ),
+                "timemosaic_gate_temperature": args.timemosaic_gate_temperature,
+                "timemosaic_selector_balance_weight": (
+                    args.timemosaic_selector_balance_weight
+                ),
+                "timemosaic_graph_token_grid": args.timemosaic_graph_token_grid,
+                "timemosaic_gate_checkpoint_identity": _checkpoint_identity(
+                    args.timemosaic_gate_checkpoint,
+                    "full",
+                ),
+                "timemosaic_freeze_gate": args.timemosaic_freeze_gate,
+                "split_input_identity": split_input_identity,
+                "feature_code_identity": feature_code_identity,
+                "runtime_identity": runtime_identity,
+            }
+        )
+    elif patch_mindts:
         configuration.update(
             {
                 "med_activity_adaptive_granularity": True,
@@ -662,11 +739,16 @@ if __name__ == "__main__":
     os.makedirs(result_dir, exist_ok=False)
 
     patch_mindts_enabled = args.modal_interaction == "patch_mindts"
+    timemosaic_graph_enabled = (
+        args.modal_interaction == "patch_timemosaic_graph"
+    )
     patch_router_mode = args.patch_granularity_router_mode
     patch_router_v5 = patch_mindts_enabled and patch_router_mode == "adaptive_v5"
     run_protocol = {
         "schema": (
-            6
+            7
+            if timemosaic_graph_enabled
+            else 6
             if patch_router_v5
             else 5
             if patch_mindts_enabled
@@ -697,13 +779,61 @@ if __name__ == "__main__":
         ),
         "metric_unit": (
             "window_and_subject_when_subject_ids_available"
-            if patch_mindts_enabled
+            if patch_mindts_enabled or timemosaic_graph_enabled
             else "processed_one_second_window"
             if args.datasets == "eeg"
             else "sample"
         ),
     }
-    if patch_mindts_enabled:
+    if timemosaic_graph_enabled:
+        run_protocol.update(
+            {
+                "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+                "outer_patch_size": args.outer_patch_size,
+                "outer_patch_stride": args.outer_patch_stride,
+                "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
+                "line_plot_layout": "stacked_channel_lanes_v1",
+                "activity_graph_count_per_window": 1,
+                "activity_graph_generation": (
+                    "raw_signal_region_gate_then_selected_activity_map_then_"
+                    "channel_propagation_and_rasterization"
+                ),
+                "granularity_candidates": [4, 8, 16],
+                "granularity_region_length": 16,
+                "granularity_selection_training": (
+                    "hard_straight_through_gumbel_softmax"
+                ),
+                "granularity_selection_evaluation": "argmax_one_hot",
+                "timemosaic_gate_temperature": args.timemosaic_gate_temperature,
+                "timemosaic_selector_balance_weight": (
+                    args.timemosaic_selector_balance_weight
+                ),
+                "timemosaic_gate_checkpoint": (
+                    anonymize_runtime_value(args.timemosaic_gate_checkpoint)
+                    if args.timemosaic_gate_checkpoint
+                    else None
+                ),
+                "timemosaic_freeze_gate": args.timemosaic_freeze_gate,
+                "visual_fusion": (
+                    "pooled_line_query_activity_graph_spatial_key_value_"
+                    "cross_attention"
+                ),
+                "graph_spatial_token_grid": args.timemosaic_graph_token_grid,
+                "alignment_scope": (
+                    "symmetric_within_sample_N_by_N_visual_mantis_no_cross_"
+                    "batch_negatives"
+                ),
+                "alignment_dim": args.patch_alignment_dim,
+                "alignment_temperature": args.patch_alignment_temperature,
+                "alignment_weight": args.patch_alignment_weight,
+                "temporal_visual_fusion": "concat_mlp",
+                "patch_pooling": "valid_fraction_weighted_mean_v1",
+                "checkpoint_metric": args.patch_checkpoint_metric,
+                "historical_checkpoint_compatible": False,
+                "historical_path": "patch_mindts",
+            }
+        )
+    elif patch_mindts_enabled:
         run_protocol.update(
             {
                 "med_activity_adaptive_granularity": True,
@@ -1073,7 +1203,10 @@ if __name__ == "__main__":
         if vali_loader is not None:
             sample_count += len(vali_loader.dataset)
         print("Samples: ", sample_count)
-        if args.image_mode in {"activity_graph", "med_activity_graph"}:
+        if (
+            args.image_mode in {"activity_graph", "med_activity_graph"}
+            and not timemosaic_graph_enabled
+        ):
             save_activity_graph_samples(
                 result_dir=result_dir,
                 dataset=dataset,
@@ -1099,7 +1232,10 @@ if __name__ == "__main__":
                 dataloader=train_loader,
                 num_samples=args.save_activity_lineplot_samples,
             )
-        elif args.image_mode == "multichannel_line_plot":
+        elif (
+            args.image_mode == "multichannel_line_plot"
+            or timemosaic_graph_enabled
+        ):
             save_activity_lineplot_samples(
                 result_dir=result_dir,
                 dataset=dataset,
@@ -1255,7 +1391,10 @@ if __name__ == "__main__":
                         adaptive_split_identity = None
                         adaptive_feature_code_identity = None
                         adaptive_runtime_identity = None
-                        if args.med_activity_adaptive_granularity:
+                        if (
+                            args.med_activity_adaptive_granularity
+                            or timemosaic_graph_enabled
+                        ):
                             adaptive_split_identity = _split_input_identity(
                                 train_loader=train_loader,
                                 train_labels=train_labels,
@@ -1264,11 +1403,18 @@ if __name__ == "__main__":
                                 vali_loader=vali_loader,
                                 vali_labels=vali_labels,
                             )
-                            adaptive_feature_code_identity = (
-                                _patch_feature_extractor_code_identity()
-                                if args.modal_interaction == "patch_mindts"
-                                else _feature_extractor_code_identity()
-                            )
+                            if timemosaic_graph_enabled:
+                                adaptive_feature_code_identity = (
+                                    _timemosaic_feature_extractor_code_identity()
+                                )
+                            elif args.modal_interaction == "patch_mindts":
+                                adaptive_feature_code_identity = (
+                                    _patch_feature_extractor_code_identity()
+                                )
+                            else:
+                                adaptive_feature_code_identity = (
+                                    _feature_extractor_code_identity()
+                                )
                             adaptive_runtime_identity = (
                                 _feature_runtime_identity()
                             )
@@ -1307,7 +1453,101 @@ if __name__ == "__main__":
                             encoding="utf-8",
                         )
                         print(f"Feature cache key: {feature_cache_key}")
-                    if args.modal_interaction == "patch_mindts":
+                    if args.modal_interaction == "patch_timemosaic_graph":
+                        val_metrics, test_metrics, train_indices, val_indices = (
+                            train_timemosaic_graph_classifier(
+                                train_loader=train_loader,
+                                train_labels=train_labels,
+                                test_loader=test_loader,
+                                test_labels=test_labels,
+                                channels=channels,
+                                device=device,
+                                batch_size=args.batch_size,
+                                random_seed=args.random_seed,
+                                val_ratio=args.val_ratio,
+                                hidden_dim=args.mlp_hidden_dim,
+                                num_layers=args.mlp_num_layers,
+                                dropout=args.mlp_dropout,
+                                lr=args.mlp_lr,
+                                weight_decay=args.mlp_weight_decay,
+                                class_weight=args.mlp_class_weight,
+                                epochs=args.mlp_epochs,
+                                early_stop_patience=(
+                                    args.mlp_early_stop_patience
+                                ),
+                                early_stop_strategy=(
+                                    args.mlp_early_stop_strategy
+                                ),
+                                early_stop_min_epochs=(
+                                    args.mlp_early_stop_min_epochs
+                                ),
+                                early_stop_warmup_epochs=(
+                                    args.mlp_early_stop_warmup_epochs
+                                ),
+                                early_stop_ema_decay=(
+                                    args.mlp_early_stop_ema_decay
+                                ),
+                                early_stop_min_delta=(
+                                    args.mlp_early_stop_min_delta
+                                ),
+                                lr_scheduler_type=args.mlp_lr_scheduler,
+                                lr_scheduler_patience=(
+                                    args.mlp_lr_scheduler_patience
+                                ),
+                                lr_scheduler_factor=(
+                                    args.mlp_lr_scheduler_factor
+                                ),
+                                lr_scheduler_min_lr=(
+                                    args.mlp_lr_scheduler_min_lr
+                                ),
+                                fusion_dim=args.fusion_dim,
+                                fusion_heads=args.fusion_heads,
+                                alignment_dim=args.patch_alignment_dim,
+                                alignment_temperature=(
+                                    args.patch_alignment_temperature
+                                ),
+                                alignment_weight=args.patch_alignment_weight,
+                                outer_patch_size=args.outer_patch_size,
+                                outer_patch_stride=args.outer_patch_stride,
+                                visual_encode_batch_size=(
+                                    args.visual_encode_batch_size
+                                ),
+                                vision_model=neurosigvit_1,
+                                mantis_model=mantis_model,
+                                val_loader=vali_loader,
+                                val_labels=vali_labels,
+                                feature_cache_dir=feature_cache_dir,
+                                feature_cache_signature=(
+                                    feature_cache_signature
+                                ),
+                                gate_temperature=(
+                                    args.timemosaic_gate_temperature
+                                ),
+                                channel_mix=args.med_activity_channel_mix,
+                                selector_balance_weight=(
+                                    args.timemosaic_selector_balance_weight
+                                ),
+                                checkpoint_metric=args.patch_checkpoint_metric,
+                                channel_hidden_dim=(
+                                    args.med_activity_granularity_hidden_dim
+                                ),
+                                graph_token_grid=(
+                                    args.timemosaic_graph_token_grid
+                                ),
+                                gate_checkpoint=(
+                                    args.timemosaic_gate_checkpoint
+                                ),
+                                freeze_gate=args.timemosaic_freeze_gate,
+                                artifact_dir=(
+                                    Path(result_dir)
+                                    / "timemosaic_graph"
+                                    / str(dataset)
+                                    .replace("/", "_")
+                                    .replace("\\", "_")
+                                ),
+                            )
+                        )
+                    elif args.modal_interaction == "patch_mindts":
                         val_metrics, test_metrics, train_indices, val_indices = (
                             train_patch_mindts_classifier(
                                 train_loader=train_loader,
