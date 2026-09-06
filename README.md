@@ -8,7 +8,7 @@ visual representation with frozen Mantis-8M temporal features.
 
 ![NeuroSigViT method overview](assets/neurosigvit_method.jpg)
 
-The current launcher supports ADFTD, TDBRAIN, APAVA,
+The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 `Shimmer_10_session10_AFC`, and `PADS_11_task08_TouchIndex`.
 
 ## Selected protocols
@@ -19,9 +19,8 @@ The current launcher supports ADFTD, TDBRAIN, APAVA,
 | `pads11` | `PADS_11_task08_TouchIndex` | `(N,6,976)` | subject-level 280/92/97 source split; Healthy versus Parkinson uses 212/70/73 after excluding OMD |
 
 The selected wearable protocols use a fixed data-split seed of 42. The current
-TimeMosaic launcher also defaults the model seed to 42; set `SEED` to change
-model initialization and result naming. The older activity-graph launchers may
-retain their historical default of 2022. Training-only statistics are used
+TimeMosaic scripts use model seed 42. To change it, edit `--random_seed` and
+the cache/result directory arguments in the selected script. Training-only statistics are used
 whenever normalization is required. See `DATA_PROCESSING.md` for the
 full protocol.
 
@@ -56,13 +55,12 @@ NeuroSigViT-main/
 |-- data_loading/
 |   `-- split_reference_seed42.csv
 |-- scripts/
-|   |-- run_timemosaic_graph.sh
-|   |-- run_wearable_activity_graph.sh
-|   |-- run_med_activity_multimodal.sh
-|   |-- run_eeg_patch_mindts.sh
-|   |-- run_wearable_patch_mindts.sh
-|   |-- run_shimmer_example.sh
-|   `-- run_pads_example.sh
+|   |-- adftd.sh
+|   |-- tdbrain.sh
+|   |-- apava.sh
+|   |-- shimmer10.sh
+|   |-- pads11.sh
+|   `-- run_timemosaic_graph.sh  # compatibility entry for existing job launchers
 |-- reproduction/
 |   |-- prepare_assets.py
 |   |-- evaluate_checkpoint.py
@@ -79,7 +77,8 @@ remain on the server and are excluded from this source release.
 
 This repository contains both the current pre-render adaptive Activity Graph
 path and the archived post-encoding selector comparison. Machine-local dataset
-and checkpoint paths are supplied through environment variables.
+and checkpoint paths for the current method are written directly in each
+dataset script as command-line arguments.
 
 ## Environment
 
@@ -93,15 +92,19 @@ python -m pip install -r requirements.txt
 
 The checked server environment uses Python 3.11, PyTorch 2.7.1, CUDA 12.6,
 `open_clip_torch` 2.32.0, `mantis-tsfm` 1.0.0, and `transformers` 4.33.3.
+Activate `neurosigvit` before running the scripts; the server's default
+non-interactive `python` is not the training environment.
 
 ## Checkpoints
 
-The launchers accept frozen encoder paths through `MODEL_DIR` and `MANTIS_DIR`:
+The dataset scripts use these existing model entries relative to the repository:
 
-```bash
-MODEL_DIR=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
-MANTIS_DIR=/path/to/Mantis-8M
+```text
+../models/CLIP-ViT-H-14-laion2B-s32B-b79K
+../models/Mantis-8M
 ```
+
+On another machine, edit `--vit_1_name` and `--mantis_name` in the script.
 
 The corresponding public models are
 [`laion/CLIP-ViT-H-14-laion2B-s32B-b79K`](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K)
@@ -148,7 +151,7 @@ and test data.
 Run only this endpoint with:
 
 ```bash
-DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
+CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
 ```
 
 ## Running experiments
@@ -183,32 +186,35 @@ Activity-map construction, channel propagation, rendering, cross-attention,
 InfoNCE, and classification are NeuroSigViT components; this path does not
 embed the complete TimeMosaic forecasting model.
 
-The generic launcher supports `adftd`, `tdbrain`, `apava`, `shimmer10`, and
-`pads11`. First print a command without starting training:
+Each dataset has one short script containing a direct `python -u main.py`
+command. From the repository root, activate the environment and choose a dataset:
 
 ```bash
-DRY_RUN=1 bash scripts/run_timemosaic_graph.sh adftd
+conda activate neurosigvit
+
+CUDA_VISIBLE_DEVICES=0 bash scripts/adftd.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/tdbrain.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/apava.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/shimmer10.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
 ```
 
-Set paths and runtime choices for the current machine, then replace the dataset
-key as needed:
+Run the selected line on an available GPU. Running all five lines executes the
+datasets sequentially. The scripts use the existing `data/eeg/processed` and
+`data/wearable` entries; the wearable entry points to the compatible dataset
+wrapper. Point these entries at your local datasets and keep the model entries
+listed above; no model/data-path exports are required.
 
-```bash
-export NEUROSIGVIT_EEG_ROOT=/path/to/data/eeg/processed
-export NEUROSIGVIT_WEARABLE_ROOT=/path/to/data/wearable
-export NEUROSIGVIT_CLIP_PATH=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
-export NEUROSIGVIT_MANTIS_PATH=/path/to/Mantis-8M
+The overridden training settings are visible in the selected `.sh` file. Batch sizes are
+8 for ADFTD/TDBRAIN/APAVA, 1 for Shimmer10, and 4 for PADS11. Each script uses
+seed 42, 100 epochs, and the existing early-stopping/scheduler configuration.
+Unspecified options retain the defaults in `src/arguments.py`.
 
-GPU=1 SEED=42 bash scripts/run_timemosaic_graph.sh tdbrain
-GPU=2 SEED=43 bash scripts/run_timemosaic_graph.sh pads11
-```
+Additional `main.py` arguments may be appended to a script invocation. For
+example, append `--mlp_lr 1e-4` to change the learning rate. When changing the
+seed, also set `--feature_cache_dir` and `--result_dir` to the intended run
+directories; these are explicit paths in the short scripts.
 
-`GPU`, `SEED`, `EEG_DATA_DIR`, `WEARABLE_DATA_ROOT`, `MODEL_DIR`,
-`MANTIS_DIR`, `PYTHON_BIN`, `RESULT_DIR`, `FEATURE_CACHE_DIR`, `BATCH_SIZE`,
-`VISUAL_BATCH_SIZE`, `EPOCHS`, `PATIENCE`, `GATE_CHECKPOINT`, and
-`FREEZE_GATE` are environment variables. The launcher does not choose or
-reserve a GPU; `GPU` is passed to
-`CUDA_VISIBLE_DEVICES`. Extra `main.py` arguments may follow the dataset key.
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
 Mantis patch alignment, and final visual-Mantis `concat_attn` fusion.
@@ -218,27 +224,18 @@ This path is selected only by
 `--med_activity_adaptive_granularity`: that flag activates the historical
 post-encoding graph bank and is rejected for the current path.
 
-### Original activity-graph examples
-
-From the repository root, first print each command without starting training:
-
-```bash
-DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh shimmer10
-DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
-```
-
-Remove `DRY_RUN=1` only after checking GPU availability. The convenience
-wrappers are equivalent:
+The existing `run_timemosaic_graph.sh` is retained unchanged for compatibility
+with automated jobs. Its dataset-key invocation and dry-run behavior remain
+available:
 
 ```bash
-bash scripts/run_shimmer_example.sh
-bash scripts/run_pads_example.sh
+DRY_RUN=1 bash scripts/run_timemosaic_graph.sh adftd
 ```
 
-`GPU`, `SEED`, `EPOCHS`, `PATIENCE`, `RESULT_DIR`, `FEATURE_CACHE_DIR`,
-`MODEL_DIR`, `MANTIS_DIR`, `DATA_DIR`, `WEARABLE_DATA_ROOT`, and `PYTHON_BIN`
-can be overridden as environment variables. Additional `main.py` arguments may
-follow the dataset key.
+Historical Activity Graph, Patch-MindTS, GPU-waiting, batch-launching, and
+Router-v4 analysis scripts have been removed from the current `scripts/`
+directory. Their committed versions remain recoverable from Git; historical
+worktrees retain their own copies.
 
 ### Archived TimeMosaic selector-only configuration (post-encoding)
 
@@ -271,22 +268,8 @@ and evaluated separately.
 | LR scheduler | ReduceLROnPlateau, patience 4, factor 0.5, minimum LR `1e-6` |
 | Batch size | ADFTD/TDBRAIN/APAVA 8; Shimmer10 1; PADS11 4 |
 
-Set portable asset locations and launch one run from the repository root:
-
-```bash
-export NEUROSIGVIT_EEG_ROOT=/path/to/data/eeg
-export NEUROSIGVIT_WEARABLE_ROOT=/path/to/data/wearable
-export NEUROSIGVIT_CLIP_PATH=/path/to/CLIP-ViT-H-14-laion2B-s32B-b79K
-export NEUROSIGVIT_MANTIS_PATH=/path/to/Mantis-8M
-
-CUDA_VISIBLE_DEVICES=0 python run_selector_comparison.py \
-  --method timemosaic \
-  --dataset adftd \
-  --seed 42 \
-  --output-root results/selector_only
-```
-
-The exact runtime values are also encoded in `run_selector_comparison.py`.
+The archived entry is `run_selector_comparison.py`; its asset configuration
+and exact runtime values are defined in that module and `experiment_common.py`.
 `selector_host.py` installs the selected routing policy into the unchanged
 `PatchMindTSFusionModule`; `selector_policies/timemosaic.py` contains the
 TimeMosaic-style selector.
@@ -294,8 +277,7 @@ TimeMosaic-style selector.
 ### Additional code paths
 
 The source also includes MedActivity image transforms, adaptive granularity
-selection, and Patch-MindTS / Router development paths. The original Shimmer
-and PADS launchers above remain available.
+selection, and Patch-MindTS / Router development paths.
 
 | Entry | Purpose |
 | --- | --- |
@@ -303,22 +285,17 @@ and PADS launchers above remain available.
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/timemosaic_patch_pipeline.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/timemosaic_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/run_timemosaic_graph.sh` | Portable five-dataset launcher for the current method |
+| `scripts/adftd.sh`, `tdbrain.sh`, `apava.sh`, `shimmer10.sh`, `pads11.sh` | Direct per-dataset commands for the current method |
+| `scripts/run_timemosaic_graph.sh` | Compatibility launcher for existing automated jobs |
 | `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |
 | `src/patch_mindts.py` | Patch-MindTS and Router implementation |
 | `selector_policies/timemosaic.py` | TimeMosaic-style adaptive granularity selector |
 | `selector_host.py` | Controlled selector replacement on the shared Patch-MindTS host |
 | `run_selector_comparison.py` | Fixed five-dataset selector-only experiment configuration |
-| `scripts/run_med_activity_multimodal.sh` | MedActivity multimodal launcher |
-| `scripts/run_eeg_patch_mindts.sh` | EEG Patch-MindTS launcher |
-| `scripts/run_wearable_patch_mindts.sh` | Shimmer / PADS Patch-MindTS launcher |
 
 See [MedActivity implementation notes](docs/MEDACTIVITY.md) for the image and
-feature layouts. The MedActivity launcher uses seed 42 by default; the original selected-dataset
-launcher uses the default described above. Check each launcher's configuration
-and set dataset, checkpoint, cache, and output paths for your environment.
-For EEG runs, set `EEG_DATA_DIR` (default: `data/eeg/processed`);
-`PYTHON_BIN` defaults to the active environment's `python`.
+feature layouts of the historical transforms. The current scripts contain
+their dataset, checkpoint, cache, and output paths directly.
 
 Run scripts from the repository root. Real experiments require the corresponding
 local datasets and frozen encoders; this source update does not report new
@@ -329,10 +306,7 @@ benchmark results or establish equivalence between development and snapshot runs
 ```bash
 python -m compileall -q main.py src data_loading scripts selector_policies \
   reproduction selector_host.py experiment_common.py run_selector_comparison.py
-bash -n scripts/run_wearable_activity_graph.sh
-bash -n scripts/run_timemosaic_graph.sh
-bash -n scripts/run_eeg_patch_mindts.sh
-bash -n scripts/run_wearable_patch_mindts.sh
+for script in scripts/*.sh; do bash -n "$script"; done
 ```
 
 These checks verify that the published Python sources compile and the maintained

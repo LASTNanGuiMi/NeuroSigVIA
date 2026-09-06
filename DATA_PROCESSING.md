@@ -1,7 +1,7 @@
 # Wearable dataset processing protocols
 
 The two maintained clinical datasets are stored under `data/wearable/` and
-launched through `scripts/run_wearable_activity_graph.sh`.
+launched through `scripts/shimmer10.sh` and `scripts/pads11.sh`.
 
 | Key | Dataset | Input tensor | Split | Labels | Normalization |
 |---|---|---|---|---|---|
@@ -10,31 +10,24 @@ launched through `scripts/run_wearable_activity_graph.sh`.
 
 Shimmer and PADS use the subject IDs in `Meta/subject_map.csv`; the split audit
 written with each run records the original and mapped labels. The fixed
-data-split seed is 42 in both loaders. The wrapper's `SEED` variable maps to
-`--random_seed` (default
-2022) for model initialization, training randomness, and result naming; it does
-not replace the fixed split seed.
+data-split seed is 42 in both loaders. The current scripts explicitly set
+`--random_seed 42` for model initialization and training randomness; this
+option does not replace the fixed split seed.
 
 Run examples:
 
 ```bash
-source ~/miniconda3/etc/profile.d/conda.sh
 conda activate neurosigvit
-cd NeuroSigViT-main
-DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh shimmer10
-DRY_RUN=1 bash scripts/run_wearable_activity_graph.sh pads11
+CUDA_VISIBLE_DEVICES=0 bash scripts/shimmer10.sh
+CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
 ```
 
-Remove `DRY_RUN=1` only after checking GPU availability. `GPU`, `SEED`,
-`EPOCHS`, `PATIENCE`, `RESULT_DIR`, and `FEATURE_CACHE_DIR` can be overridden as
-environment variables. Set `WEARABLE_DATA_ROOT` when the dataset parent is not
-`data/wearable/`. Additional `main.py` arguments can be appended after the dataset
-key.
+Run a selected command from the repository root on an available GPU. Edit
+`--data_dir` if the compatible wearable dataset wrapper is stored elsewhere.
+Training parameters and cache/result paths are written directly in each
+script. Additional `main.py` arguments can be appended to the invocation.
 
-The commands assume the `neurosigvit` Conda environment described in
-`README.md`. If Miniconda is installed elsewhere, adjust only the first
-`source` command locally; do not put that machine-specific path into a
-submitted script or document.
+The commands use the active `neurosigvit` environment described in `README.md`.
 
 Before creating an anonymous artifact, follow `ANONYMITY.md`. Local data links,
 results, caches, checkpoints, and Git metadata are runtime-only and must not be
