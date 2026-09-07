@@ -29,7 +29,7 @@ from sklearn.metrics import (
 )
 from torch.utils.data import DataLoader, TensorDataset
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 MODELS = ("Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer")
 DATASETS = ("adftd", "tdbrain", "apava", "shimmer10", "pads11")
 DEFAULT_BATCH = dict(adftd=8, tdbrain=8, apava=8, shimmer10=1, pads11=4)
@@ -171,7 +171,7 @@ def import_model(name, vendor_root):
 
 
 def source_metadata(vendor_root):
-    paths = [Path(__file__), ROOT / "experiment_common.py", ROOT / "src/datautils.py", ROOT / "data_loading/datasets.py"]
+    paths = [Path(__file__), ROOT / "data_loading/experiment.py", ROOT / "src/datautils.py", ROOT / "data_loading/datasets.py"]
     paths.extend(sorted(Path(vendor_root).rglob("*.py")))
     paths.extend(p for p in Path(vendor_root).glob("*") if p.is_file() and p.suffix.lower() in (".json", ".md"))
     hashes = {str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path): digest_file(path)
@@ -288,7 +288,7 @@ def validate_args(args):
 
 
 def run(args):
-    from experiment_common import load_data
+    from data_loading.experiment import load_data
     from src.datautils import write_eeg_medformer_split_audit, write_wearable_split_audit
 
     started = time.monotonic()

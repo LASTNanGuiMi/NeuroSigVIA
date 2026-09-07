@@ -20,7 +20,7 @@ train_one() {
   configure_dataset "$dataset"
   # Original model implementations are copied from the Medformer project.
   # These are study-specific starting configurations, not paper-tuned results.
-  run_python run_baseline.py \
+  run_python -m runners.baselines \
     --task_name classification \
     --model "$model_name" \
     --dataset "$dataset" \

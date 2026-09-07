@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.datautils import get_eeg_medformer_dataloaders, get_wearable_dataloaders
 
-ROOT=Path(__file__).resolve().parent
+ROOT=Path(__file__).resolve().parents[1]
 EEG_ROOT=Path(os.environ.get('NEUROSIGVIA_EEG_ROOT',ROOT/'data'/'eeg')).expanduser()
 WEARABLE_ROOT=Path(os.environ.get('NEUROSIGVIA_WEARABLE_ROOT',ROOT/'data'/'wearable')).expanduser()
 

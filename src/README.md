@@ -2,11 +2,14 @@
 
 The modules under `src/` are organized by their function in NeuroSigVIA.
 The Medformer baseline and the other five baseline implementations live in
-`third_party/medformer/` and are called by the root `run_baseline.py` entry.
+`third_party/medformer/` and are called by `runners/baselines.py`. Its shared
+dataset loader is `data_loading/experiment.py`.
 
 ## Current adaptive Activity Graph path
 
-`main.py --modal_interaction adaptive_granularity` selects the current path.
+`python -m runners.neurosigvia --modal_interaction adaptive_granularity`
+selects the current path. Root `main.py` forwards existing queued commands
+to this module.
 Its modules have the following responsibilities:
 
 | Module | Responsibility |

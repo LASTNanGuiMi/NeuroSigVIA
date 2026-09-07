@@ -187,8 +187,8 @@ run_experiments() {
   git rev-parse HEAD > "$STATUS_ROOT/git_commit.txt"
   git diff --binary > "$STATUS_ROOT/tracked_changes.patch"
   # Include newly added entrypoints/runner/vendor hashes, which git diff omits.
-  find scripts third_party -type f ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > "$STATUS_ROOT/source_sha256.txt"
-  sha256sum main.py run_baseline.py src/datautils.py data_loading/datasets.py >> "$STATUS_ROOT/source_sha256.txt"
+  find scripts runners third_party -type f ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > "$STATUS_ROOT/source_sha256.txt"
+  sha256sum main.py src/datautils.py data_loading/experiment.py data_loading/datasets.py >> "$STATUS_ROOT/source_sha256.txt"
   {
     printf 'method=%s\nrun_tag=%s\ntraining_seeds=%s\nsplit_seed=42\npython=%s\nstarted_at=%s\n' "$METHOD" "$RUN_TAG" "${SEED_VALUES[*]}" "$PYTHON_BIN" "$(date -Is)"
     printf 'extra_arguments='; printf '%q ' "$@"; printf '\n'

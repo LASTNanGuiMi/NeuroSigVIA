@@ -58,7 +58,7 @@ Their original model names and MIT attribution remain intact; see
 [the license](third_party/medformer/LICENSE) and
 [the file hashes](third_party/medformer/SOURCE_MANIFEST.json).
 
-`run_baseline.py` is the study's own training adapter and uses the maintained
+`runners/baselines.py` is the study's own training adapter and uses the maintained
 subject splits, labels, sequence lengths and normalization. Its method
 scripts provide a shared initial configuration; these settings and resulting
 runs must not be presented as original-paper tuned configurations or

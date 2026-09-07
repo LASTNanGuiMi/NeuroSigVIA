@@ -18,7 +18,7 @@ train_one() {
   local dataset="$1" seed="$2" result="$3" cache="$4"
   shift 4
   configure_dataset "$dataset"
-  run_python main.py \
+  run_python -m runners.neurosigvia \
     --datasets "$DATASET_GROUP" \
     --dataset_names "$DATASET_NAME" \
     --data_dir "$DATA_ROOT" \

@@ -28,10 +28,12 @@ full protocol.
 ## Repository layout
 
 ```text
-NeuroSigVIA-main/
-|-- main.py
-|-- run_baseline.py
-|-- experiment_common.py
+NeuroSigVIA/
+|-- main.py                  # Compatibility launcher for existing queues
+|-- runners/
+|   |-- __init__.py
+|   |-- neurosigvia.py
+|   `-- baselines.py
 |-- third_party/medformer/
 |-- src/
 |   |-- README.md
@@ -59,6 +61,8 @@ NeuroSigVIA-main/
 |       |-- Shimmer_10_session10_AFC/
 |       `-- PADS_11_task08_TouchIndex/
 |-- data_loading/
+|   |-- datasets.py
+|   |-- experiment.py
 |   `-- split_reference_seed42.csv
 |-- assets/
 |   `-- neurosigvit_method.jpg
@@ -78,6 +82,12 @@ NeuroSigVIA-main/
 |-- requirements.txt
 `-- LICENSE
 ```
+
+Training implementations live in `runners/`: `neurosigvia.py` runs the current
+method and `baselines.py` runs the comparison models. Shared baseline dataset
+loading lives in `data_loading/experiment.py`. The method shell scripts call
+these modules with `python -m`; root `main.py` only forwards existing queued
+commands to `runners.neurosigvia`.
 
 The local dataset directories and links are runtime inputs. Datasets, model
 checkpoints, feature caches, logs, results, backups, and experiment snapshots
@@ -263,6 +273,8 @@ and the other five baseline implementations are under `third_party/medformer/`.
 
 | Entry | Purpose |
 | --- | --- |
+| `runners/neurosigvia.py`, `runners/baselines.py` | Current method and baseline training entry points |
+| `data_loading/experiment.py` | Shared baseline data loading and subject-split integrity checks |
 | `src/temporal_granularity.py` | Pre-render 4/8/16 region gate and gate checkpoint provenance |
 | `src/adaptive_activity_graph.py` | Differentiable adaptive Activity Graph renderer |
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
@@ -286,8 +298,7 @@ benchmark results or establish equivalence between development and snapshot runs
 ## Verification
 
 ```bash
-python -m compileall -q main.py run_baseline.py experiment_common.py src \
-  data_loading tests third_party/medformer
+python -m compileall -q main.py runners src data_loading tests third_party/medformer
 for script in scripts/*.sh; do bash -n "$script"; done
 ```
 

@@ -13,7 +13,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import run_baseline as baseline
+from runners import baselines as baseline
 
 
 @contextlib.contextmanager
@@ -84,7 +84,7 @@ class ProtocolTests(unittest.TestCase):
                     "--result_dir", directory, "--train_epochs", "2", "--warmup_epochs", "0",
                     "--batch_size", "2"] + (["--smoke"] if smoke else []))
                 baseline.validate_args(args)
-                common = ModuleType("experiment_common")
+                common = ModuleType("data_loading.experiment")
                 common.load_data = lambda key, smoke=False: (bundle(), {"subject_overlap": [0, 0, 0]})
                 datautils = ModuleType("src.datautils")
                 def write_audit(_bundle, path):
@@ -99,7 +99,7 @@ class ProtocolTests(unittest.TestCase):
                     if np.min(ids) >= 21:
                         seen_test.append(True)
                     return real_evaluate(model, loader, ids, device, num_classes)
-                with replace_modules({"experiment_common": common, "src.datautils": datautils}), \
+                with replace_modules({"data_loading.experiment": common, "src.datautils": datautils}), \
                      patch.object(baseline, "import_model", return_value=TinyModel), \
                      patch.object(baseline, "source_metadata", return_value={}), \
                      patch.object(baseline, "evaluate", side_effect=counting_evaluate), \
