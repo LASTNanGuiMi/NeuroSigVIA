@@ -1,10 +1,13 @@
 """Adaptive temporal granularity selection for NeuroSigVIA.
 
-Route each channel's 16-sample region to a granularity of 4, 8, or 16 before
-activity graph construction. Training uses hard straight-through selection;
-evaluation and frozen gates use deterministic argmax routing. Checkpoint
-loading and gate freezing belong to this module. Source attribution is
-recorded in src/provenance.py and SOURCE_NOTES.md.
+Route each channel's 16-sample region to a granularity of 4, 8, or 16. The
+renderer uses that choice to select a piecewise-mean waveform before applying
+the paper's pair-coverage ordering and cyclic three-column Activity Graph
+layout. This pre-render integration is specific to NeuroSigVIA. Training
+uses hard straight-through selection; evaluation and frozen gates use
+deterministic argmax routing. Checkpoint loading and gate freezing belong to
+this module. Source attribution is recorded in src/provenance.py and
+SOURCE_NOTES.md.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from src.provenance import (
 )
 
 
-ADAPTATION_VERSION = "adaptive_granularity_activity_graph_v1"
+ADAPTATION_VERSION = "adaptive_granularity_paper_waveform_graph_v2"
 
 PathLike = Union[str, os.PathLike]
 CheckpointLike = Union[PathLike, Mapping[str, Any]]
@@ -126,6 +129,8 @@ class AdaptiveGranularityGate(nn.Module):
             "adaptation_boundary": ADAPTATION_BOUNDARY,
             "region_length": 16,
             "granularities": [4, 8, 16],
+            "downstream_representation": "selected_piecewise_mean_waveform",
+            "graph_integration": "project_gate_before_yang2022_algorithms_1_and_3",
             "training_selection": "hard_straight_through_gumbel_softmax",
             "evaluation_selection": "argmax_one_hot",
         }

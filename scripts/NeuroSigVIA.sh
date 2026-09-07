@@ -27,7 +27,6 @@ train_one() {
     --vit_1_layer 14 \
     --aggregation mean \
     --image_mode med_activity_graph \
-    --med_activity_channel_mix 0.35 \
     --med_activity_granularity_hidden_dim 64 \
     --mantis --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
     --classifier_type mlp \
@@ -36,6 +35,9 @@ train_one() {
     --granularity_gate_temperature 0.5 \
     --granularity_balance_weight 0.001 \
     --granularity_graph_token_grid 4 \
+    --activity_graph_canvas_size 360 \
+    --activity_graph_line_width 1.0 \
+    --activity_graph_vertical_margin 0.05 \
     --patch_alignment_dim 256 --patch_alignment_temperature 0.1 \
     --patch_alignment_weight 0.1 \
     --patch_checkpoint_metric subject_macro_f1 \
@@ -54,6 +56,7 @@ train_one() {
     --batch_size "$TRAIN_BATCH_SIZE" \
     --random_seed "$seed" \
     --feature_cache_dir "$cache" \
+    --reuse_static_cache_dir "${REUSE_STATIC_CACHE_DIR:-feature_cache}" \
     --result_dir "$result" \
     "$@"
 }

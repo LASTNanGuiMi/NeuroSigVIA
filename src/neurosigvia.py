@@ -21,6 +21,7 @@ from transformers import (
 from src.activity_graph import (
     ActivityGraphRenderer,
     TemporalGranularityGraphBank,
+    paper_signal_order,
 )
 
 
@@ -52,41 +53,9 @@ def _adaptive_granularity_metadata(base_patch_lengths, granularity_bank):
 
 
 def get_optimal_order(n):
-    if n < 0:
-        raise ValueError(f"Number of signal channels must be non-negative, got {n}.")
-    if n <= 1:
-        return list(range(n))
+    """Compatibility wrapper for Yang et al.'s published Algorithm 1."""
 
-    total_pairs = n * (n - 1) // 2
-    visited_pairs = set()
-    id_list = [0]
-
-    while len(visited_pairs) < total_pairs:
-        current = id_list[-1]
-        next_id = None
-
-        for candidate in range(n):
-            if candidate == current:
-                continue
-            pair = tuple(sorted((current, candidate)))
-            if pair not in visited_pairs:
-                next_id = candidate
-                break
-
-        if next_id is None:
-            for i in range(n):
-                for j in range(i + 1, n):
-                    if (i, j) not in visited_pairs:
-                        next_id = i if current != i else j
-                        break
-                if next_id is not None:
-                    break
-
-        pair = tuple(sorted((current, next_id)))
-        visited_pairs.add(pair)
-        id_list.append(next_id)
-
-    return id_list
+    return list(paper_signal_order(n))
 
 
 def build_single_column_graph(signals, id_list):
@@ -161,51 +130,19 @@ def render_activity_waveform_graph(
     min_strip_height=8,
     line_width=1.0,
 ):
+    """Render one paper-layout graph through the shared tensor renderer."""
+
     signals = np.asarray(signals, dtype=np.float32)
     if signals.ndim != 2:
         raise ValueError(f"signals must have shape (n, T), got {signals.shape}.")
-
-    if id_list is None:
-        id_list = get_optimal_order(signals.shape[0])
-
-    if mode == "single_column":
-        rows = [[signal_id] for signal_id in id_list]
-    elif mode == "multicolumn":
-        rows = [
-            [id_list[k - 1], signal_id, id_list[(k + 1) % len(id_list)]]
-            for k, signal_id in enumerate(id_list)
-        ]
-    else:
+    if mode != "multicolumn":
         raise ValueError(f"Unsupported activity graph mode {mode}.")
-
-    columns = len(rows[0]) if rows else 1
-    row_height = max(min_strip_height, int(np.ceil(img_size / max(len(rows), 1))))
-    canvas_height = max(img_size, row_height * max(len(rows), 1))
-    canvas_width = img_size
-    canvas = np.ones((canvas_height, canvas_width), dtype=np.float32)
-
-    value_min = float(signals.min())
-    value_max = float(signals.max())
-    column_edges = np.linspace(0, canvas_width, columns + 1, dtype=np.int64)
-
-    for row_idx, row_signal_ids in enumerate(rows):
-        y0 = row_idx * row_height
-        for col_idx, signal_id in enumerate(row_signal_ids):
-            x0 = int(column_edges[col_idx])
-            x1 = int(column_edges[col_idx + 1])
-            _draw_waveform(
-                canvas=canvas,
-                signal=signals[signal_id],
-                x0=x0,
-                y0=y0,
-                width=x1 - x0,
-                height=row_height,
-                value_min=value_min,
-                value_max=value_max,
-                line_width=line_width,
-            )
-
-    return canvas
+    expected = get_optimal_order(signals.shape[0])
+    if id_list is not None and list(id_list) != expected:
+        raise ValueError("id_list must equal the paper Algorithm 1 order")
+    renderer = ActivityGraphRenderer(img_size=img_size, line_width=line_width)
+    image = renderer(torch.from_numpy(signals).unsqueeze(0))
+    return image[0, 0].detach().cpu().numpy()
 
 
 def generate_activity_graph(signals, mode="multicolumn", id_list=None):
@@ -232,6 +169,22 @@ def preprocess_graph(signals, mode="multicolumn", img_size=224, render="waveform
     device = signals.device if torch.is_tensor(signals) else None
     dtype = signals.dtype if torch.is_tensor(signals) else torch.float32
 
+    if render == "waveform":
+        if mode != "multicolumn":
+            raise ValueError(f"Unsupported activity graph mode {mode}.")
+        tensor = signals if torch.is_tensor(signals) else torch.as_tensor(signals)
+        if tensor.ndim == 2:
+            tensor = tensor.unsqueeze(0)
+        if tensor.ndim != 3:
+            raise ValueError(
+                f"signals must have shape (n, T) or (B, n, T), got {tuple(tensor.shape)}."
+            )
+        if not tensor.is_floating_point():
+            tensor = tensor.float()
+        return ActivityGraphRenderer(img_size=img_size)(tensor).to(
+            device=device, dtype=dtype
+        )
+
     if torch.is_tensor(signals):
         signals_np = signals.detach().cpu().numpy()
     else:
@@ -247,14 +200,7 @@ def preprocess_graph(signals, mode="multicolumn", img_size=224, render="waveform
     for sample in signals_np:
         n = sample.shape[0]
         id_list = order_cache.setdefault(n, get_optimal_order(n))
-        if render == "waveform":
-            graph = render_activity_waveform_graph(
-                sample,
-                mode=mode,
-                id_list=id_list,
-                img_size=img_size,
-            )
-        elif render == "matrix":
+        if render == "matrix":
             graph = generate_activity_graph(sample, mode=mode, id_list=id_list).astype(
                 np.float32, copy=False
             )
@@ -573,12 +519,12 @@ def get_neurosigvia(
     stride,
     patch_size,
     image_mode="line_plot",
-    med_activity_patch_lengths=(2, 4, 8),
+    med_activity_patch_lengths=(1,),
     med_activity_channel_mix=0.35,
     med_activity_router_temperature=0.2,
     med_activity_router_mix=0.5,
     med_activity_adaptive_granularity=False,
-    med_activity_granularity_bank=((1, 2, 4), (2, 4, 8), (4, 8, 16)),
+    med_activity_granularity_bank=((4,), (8,), (16,)),
 ):
     processor, vit = get_processor_vit(model_name)
 

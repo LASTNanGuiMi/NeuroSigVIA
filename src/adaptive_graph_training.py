@@ -67,9 +67,9 @@ from src.utils import get_split, set_random_seed
 
 NEUROSIGVIA_CACHE_SCHEMA_VERSION = 1
 NEUROSIGVIA_CACHE_ARCHITECTURE = "neurosigvia_adaptive_graph_static_v1"
-NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION = 2
+NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION = 3
 NEUROSIGVIA_ARCHITECTURE = (
-    "neurosigvia_adaptive_graph_crossattn_concatattn_v2"
+    "neurosigvia_paper_multicolumn_graph_crossattn_concatattn_v3"
 )
 
 NEUROSIGVIA_STATIC_KEYS = (
@@ -668,7 +668,9 @@ class NeuroSigVIAClassifier(nn.Module):
         alignment_temperature: float = 0.1,
         graph_image_size: int = 224,
         graph_token_grid: int = OPENCLIP_SPATIAL_GRID_SIZE,
-        adaptive_channel_mix: float = 0.35,
+        activity_graph_canvas_size: int = 360,
+        activity_graph_line_width: float = 1.0,
+        activity_graph_vertical_margin: float = 0.05,
         adaptive_temperature: float = 0.5,
         freeze_adaptive_gate: bool = False,
         cross_attention_ffn_hidden_dim: int | None = None,
@@ -688,11 +690,13 @@ class NeuroSigVIAClassifier(nn.Module):
         self.graph_token_grid = int(graph_token_grid)
         self.renderer = AdaptiveActivityGraphRenderer(
             img_size=graph_image_size,
-            channel_mix=adaptive_channel_mix,
             temperature=adaptive_temperature,
             gate_checkpoint=adaptive_gate_checkpoint,
             freeze_gate=freeze_adaptive_gate,
             strict_gate_checkpoint=strict_gate_checkpoint,
+            canvas_size=activity_graph_canvas_size,
+            line_width=activity_graph_line_width,
+            vertical_margin=activity_graph_vertical_margin,
         )
         self.fusion = AdaptiveGranularityFusionModule(
             visual_dim=visual_dim,
@@ -727,7 +731,11 @@ class NeuroSigVIAClassifier(nn.Module):
             "alignment_temperature": float(alignment_temperature),
             "graph_image_size": int(graph_image_size),
             "graph_token_grid": self.graph_token_grid,
-            "adaptive_channel_mix": float(adaptive_channel_mix),
+            "activity_graph_canvas_size": int(activity_graph_canvas_size),
+            "activity_graph_line_width": float(activity_graph_line_width),
+            "activity_graph_vertical_margin": float(
+                activity_graph_vertical_margin
+            ),
             "adaptive_temperature": float(adaptive_temperature),
             "freeze_adaptive_gate": bool(freeze_adaptive_gate),
             "cross_attention_ffn_hidden_dim": (
@@ -1452,7 +1460,9 @@ def train_neurosigvia_classifier(
     feature_cache_dir=None,
     feature_cache_signature=None,
     gate_temperature=0.5,
-    channel_mix=0.35,
+    activity_graph_canvas_size=360,
+    activity_graph_line_width=1.0,
+    activity_graph_vertical_margin=0.05,
     selector_balance_weight=0.001,
     checkpoint_metric="auto",
     channel_hidden_dim=64,
@@ -1497,6 +1507,7 @@ def train_neurosigvia_classifier(
         "channel_hidden_dim": channel_hidden_dim,
         "graph_image_size": graph_image_size,
         "graph_token_grid": graph_token_grid,
+        "activity_graph_canvas_size": activity_graph_canvas_size,
     }
     for name, value in positive_integer_arguments.items():
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -1526,10 +1537,14 @@ def train_neurosigvia_classifier(
     ):
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(f"{name} must be finite and non-negative")
-    if not math.isfinite(channel_mix) or not (
-        0.0 <= channel_mix <= 1.0
+    if not math.isfinite(activity_graph_line_width) or activity_graph_line_width <= 0.0:
+        raise ValueError("activity_graph_line_width must be positive and finite")
+    if (
+        not math.isfinite(activity_graph_vertical_margin)
+        or activity_graph_vertical_margin < 0.0
+        or activity_graph_vertical_margin >= 0.5
     ):
-        raise ValueError("channel_mix must lie in [0, 1]")
+        raise ValueError("activity_graph_vertical_margin must lie in [0, 0.5)")
     if vision_model is None or mantis_model is None:
         raise ValueError("vision_model and mantis_model are required")
     if feature_cache_dir and not str(feature_cache_signature or "").strip():
@@ -1735,7 +1750,9 @@ def train_neurosigvia_classifier(
         alignment_temperature=alignment_temperature,
         graph_image_size=graph_image_size,
         graph_token_grid=graph_token_grid,
-        adaptive_channel_mix=channel_mix,
+        activity_graph_canvas_size=activity_graph_canvas_size,
+        activity_graph_line_width=activity_graph_line_width,
+        activity_graph_vertical_margin=activity_graph_vertical_margin,
         adaptive_temperature=gate_temperature,
         freeze_adaptive_gate=freeze_gate,
         cross_attention_ffn_hidden_dim=cross_attention_ffn_hidden_dim,

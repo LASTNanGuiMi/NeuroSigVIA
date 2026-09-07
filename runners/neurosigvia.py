@@ -62,7 +62,19 @@ from src.patch_mindts import (
 )
 from src.adaptive_graph_training import (
     NEUROSIGVIA_ARCHITECTURE,
+    NEUROSIGVIA_CACHE_ARCHITECTURE,
     train_neurosigvia_classifier,
+)
+from src.adaptive_cache_reuse import promote_adaptive_static_caches
+from src.adaptive_cache_identity import (
+    KNOWN_LEGACY_ADAPTIVE_ARCHITECTURE,
+    KNOWN_LEGACY_ADAPTIVE_CACHE_SCHEMA,
+    KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE,
+    KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE,
+    adaptive_static_extractor_code_identity,
+    assert_known_static_extractor_compatibility,
+    known_legacy_adaptive_code_identity,
+    known_timemosaic_code_identity,
 )
 from src.privacy import anonymize_runtime_arguments, anonymize_runtime_value
 from src.utils import (
@@ -446,31 +458,48 @@ def _patch_feature_extractor_code_identity():
 
 @lru_cache(maxsize=1)
 def _adaptive_graph_feature_extractor_code_identity():
-    """Hash the corrected pre-render adaptive granularity graph feature path."""
+    """Hash only code that materializes cached raw/Line/Mantis tensors."""
     project_root = Path(__file__).resolve().parents[1]
-    source_paths = (
-        Path("src/neurosigvia.py"),
-        Path("src/utils.py"),
-        Path("src/patch_mindts.py"),
-        Path("src/line_graph_cross_attention.py"),
-        Path("src/multimodal_fusion.py"),
-        Path("src/adaptive_graph_training.py"),
-        Path("src/activity_graph.py"),
-        Path("src/temporal_granularity.py"),
-        Path("src/adaptive_activity_graph.py"),
-        Path("src/provenance.py"),
-    )
-    manifest = hashlib.sha256()
-    components = {}
-    for relative_path in source_paths:
-        digest = _full_file_digest(project_root / relative_path)
-        relative = relative_path.as_posix()
-        components[relative] = digest
-        manifest.update(relative.encode("utf-8"))
-        manifest.update(digest.encode("ascii"))
+    return adaptive_static_extractor_code_identity(project_root)
+
+
+def _adaptive_static_encoder_contract(vision_model, mantis_model):
+    """Describe the actual frozen encoders used to materialize static tokens."""
+
+    if vision_model is None or mantis_model is None:
+        raise ValueError("adaptive static caching requires vision and Mantis models")
+    processor = getattr(vision_model, "processor", None)
+    processor_transforms = getattr(processor, "transforms", None)
+    if processor_transforms is not None:
+        processor_transforms = [repr(value) for value in processor_transforms]
+    backbone = getattr(vision_model, "vit", None)
+    mantis_network = getattr(mantis_model, "network", None)
     return {
-        "manifest_sha256": manifest.hexdigest(),
-        "components": components,
+        "vision_wrapper_class": (
+            f"{type(vision_model).__module__}.{type(vision_model).__qualname__}"
+        ),
+        "vision_backbone_class": (
+            f"{type(backbone).__module__}.{type(backbone).__qualname__}"
+            if backbone is not None
+            else None
+        ),
+        "vision_processor_class": (
+            f"{type(processor).__module__}.{type(processor).__qualname__}"
+            if processor is not None
+            else None
+        ),
+        "vision_processor_transforms": processor_transforms,
+        "vision_layer_idx": getattr(vision_model, "layer_idx", None),
+        "vision_aggregation": getattr(vision_model, "aggregation", None),
+        "vision_image_mode": getattr(vision_model, "image_mode", None),
+        "mantis_wrapper_class": (
+            f"{type(mantis_model).__module__}.{type(mantis_model).__qualname__}"
+        ),
+        "mantis_network_class": (
+            f"{type(mantis_network).__module__}.{type(mantis_network).__qualname__}"
+            if mantis_network is not None
+            else None
+        ),
     }
 
 
@@ -506,6 +535,7 @@ def build_feature_cache_signature(
     split_input_identity=None,
     feature_code_identity=None,
     runtime_identity=None,
+    static_encoder_contract=None,
 ):
     adaptive_granularity = bool(
         getattr(args, "med_activity_adaptive_granularity", False)
@@ -513,6 +543,13 @@ def build_feature_cache_signature(
     patch_mindts = getattr(args, "modal_interaction", None) == "patch_mindts"
     adaptive_graph = (
         getattr(args, "modal_interaction", None) == "adaptive_granularity"
+    )
+    fixed_activity_graph = (
+        not adaptive_graph
+        and not patch_mindts
+        and not adaptive_granularity
+        and getattr(args, "image_mode", None)
+        in {"activity_graph", "med_activity_graph", "activity_matrix"}
     )
     integrity_hashed_features = adaptive_granularity or adaptive_graph
     if integrity_hashed_features and any(
@@ -557,15 +594,18 @@ def build_feature_cache_signature(
         args.datasets == "uci" and args.uci_protocol == "official_subject"
     )
     configuration = {
-        # Fixed-mode signatures intentionally remain schema 5 so existing
-        # frozen-feature caches continue to match bit for bit.
+        # Schema 11 scopes the adaptive cache to raw/Line/Mantis tensors.  The
+        # fixed Activity Graph schema is also bumped because those caches hold
+        # graph-derived embeddings and must not survive renderer replacement.
         "schema": (
-            10
+            11
             if adaptive_graph
             else 9
             if patch_mindts
             else 7
             if adaptive_granularity
+            else 6
+            if fixed_activity_graph
             else 5
         ),
         "dataset_group": args.datasets,
@@ -592,7 +632,9 @@ def build_feature_cache_signature(
             if patch_mindts or adaptive_graph
             else args.med_activity_patch_lengths
         ),
-        "med_activity_channel_mix": args.med_activity_channel_mix,
+        "med_activity_channel_mix": (
+            None if adaptive_graph else args.med_activity_channel_mix
+        ),
         "med_activity_router_temperature": (
             None
             if patch_mindts or adaptive_graph
@@ -635,28 +677,22 @@ def build_feature_cache_signature(
         configuration.update(
             {
                 "feature_layout": "raw_windows_line_mantis_v1",
-                "architecture": NEUROSIGVIA_ARCHITECTURE,
+                "architecture": NEUROSIGVIA_CACHE_ARCHITECTURE,
+                "cache_scope": "raw_windows_line_mantis_static_v1",
                 "outer_patch_size": args.outer_patch_size,
                 "outer_patch_stride": args.outer_patch_stride,
                 "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
                 "line_plot_layout": "stacked_channel_lanes_v1",
-                "activity_graph_selection": (
-                    "raw_region_16_hard_st_4_8_16_before_graph_propagation"
-                ),
-                "granularity_gate_temperature": args.granularity_gate_temperature,
-                "granularity_balance_weight": (
-                    args.granularity_balance_weight
-                ),
-                "granularity_graph_token_grid": args.granularity_graph_token_grid,
-                "granularity_gate_checkpoint_identity": _checkpoint_identity(
-                    args.granularity_gate_checkpoint,
-                    "full",
-                ),
-                "granularity_freeze_gate": args.granularity_freeze_gate,
                 "split_input_identity": split_input_identity,
                 "feature_code_identity": feature_code_identity,
                 "runtime_identity": runtime_identity,
+                "static_encoder_contract": static_encoder_contract,
             }
+        )
+    if adaptive_graph and static_encoder_contract is None:
+        raise ValueError(
+            "adaptive static cache signatures require the actual frozen "
+            "encoder construction contract"
         )
     elif patch_mindts:
         configuration.update(
@@ -691,7 +727,89 @@ def build_feature_cache_signature(
                 "runtime_identity": runtime_identity,
             }
         )
+    elif fixed_activity_graph:
+        configuration.update(
+            {
+                "activity_graph_feature_code_identity": (
+                    _feature_extractor_code_identity()
+                ),
+                "activity_graph_cache_policy": (
+                    "graph_derived_embeddings_invalidate_on_renderer_code_v1"
+                ),
+            }
+        )
     return json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+
+
+def _known_legacy_adaptive_cache_signature(
+    args,
+    dataset,
+    channels,
+    patch_size,
+    *,
+    family,
+    split_audit_sha256,
+    split_input_identity,
+    runtime_identity,
+    static_encoder_contract,
+):
+    """Reconstruct one exact, audited schema-10 cache signature."""
+
+    if family not in {"neurosigvia_97ade80", "timemosaic_7f38ff7"}:
+        raise ValueError(f"unsupported legacy adaptive-cache family: {family}")
+    current = json.loads(
+        build_feature_cache_signature(
+            args,
+            dataset,
+            channels,
+            patch_size,
+            split_audit_sha256=split_audit_sha256,
+            split_input_identity=split_input_identity,
+            feature_code_identity=_adaptive_graph_feature_extractor_code_identity(),
+            runtime_identity=runtime_identity,
+            static_encoder_contract=static_encoder_contract,
+        )
+    )
+    current.pop("cache_scope", None)
+    current.pop("static_encoder_contract", None)
+    current["schema"] = KNOWN_LEGACY_ADAPTIVE_CACHE_SCHEMA
+    current["split_seed"] = 42
+    current["med_activity_channel_mix"] = args.med_activity_channel_mix
+    current["activity_graph_selection"] = (
+        "raw_region_16_hard_st_4_8_16_before_graph_propagation"
+    )
+
+    if family == "neurosigvia_97ade80":
+        current.update(
+            {
+                "architecture": KNOWN_LEGACY_ADAPTIVE_ARCHITECTURE,
+                "granularity_gate_temperature": args.granularity_gate_temperature,
+                "granularity_balance_weight": args.granularity_balance_weight,
+                "granularity_graph_token_grid": args.granularity_graph_token_grid,
+                "granularity_gate_checkpoint_identity": _checkpoint_identity(
+                    args.granularity_gate_checkpoint, "full"
+                ),
+                "granularity_freeze_gate": args.granularity_freeze_gate,
+                "feature_code_identity": known_legacy_adaptive_code_identity(),
+            }
+        )
+    else:
+        current.update(
+            {
+                "architecture": KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE,
+                "timemosaic_gate_temperature": args.granularity_gate_temperature,
+                "timemosaic_selector_balance_weight": (
+                    args.granularity_balance_weight
+                ),
+                "timemosaic_graph_token_grid": args.granularity_graph_token_grid,
+                "timemosaic_gate_checkpoint_identity": _checkpoint_identity(
+                    args.granularity_gate_checkpoint, "full"
+                ),
+                "timemosaic_freeze_gate": args.granularity_freeze_gate,
+                "feature_code_identity": known_timemosaic_code_identity(),
+            }
+        )
+    return json.dumps(current, sort_keys=True, separators=(",", ":"))
 
 
 if __name__ == "__main__":
@@ -795,8 +913,21 @@ if __name__ == "__main__":
                 "line_plot_layout": "stacked_channel_lanes_v1",
                 "activity_graph_count_per_window": 1,
                 "activity_graph_generation": (
-                    "raw_signal_region_gate_then_selected_activity_map_then_"
-                    "channel_propagation_and_rasterization"
+                    "adaptive_piecewise_mean_waveform_then_yang2022_"
+                    "algorithm1_algorithm3_multicolumn"
+                ),
+                "activity_graph_reference_doi": "10.1109/TII.2022.3142315",
+                "activity_graph_channel_propagation": False,
+                "activity_graph_reference_canvas_size": (
+                    args.activity_graph_canvas_size
+                ),
+                "activity_graph_output_size": 224,
+                "activity_graph_line_width": args.activity_graph_line_width,
+                "activity_graph_vertical_margin": (
+                    args.activity_graph_vertical_margin
+                ),
+                "activity_graph_plot_bounds_note": (
+                    "paper_underreported_explicit_per_signal_minmax"
                 ),
                 "granularity_candidates": [4, 8, 16],
                 "granularity_region_length": 16,
@@ -1400,6 +1531,7 @@ if __name__ == "__main__":
                         adaptive_split_identity = None
                         adaptive_feature_code_identity = None
                         adaptive_runtime_identity = None
+                        static_encoder_contract = None
                         if (
                             args.med_activity_adaptive_granularity
                             or adaptive_graph_enabled
@@ -1415,6 +1547,9 @@ if __name__ == "__main__":
                             if adaptive_graph_enabled:
                                 adaptive_feature_code_identity = (
                                     _adaptive_graph_feature_extractor_code_identity()
+                                )
+                                static_encoder_contract = _adaptive_static_encoder_contract(
+                                    neurosigvia_1, mantis_model
                                 )
                             elif args.modal_interaction == "patch_mindts":
                                 adaptive_feature_code_identity = (
@@ -1436,6 +1571,7 @@ if __name__ == "__main__":
                             split_input_identity=adaptive_split_identity,
                             feature_code_identity=adaptive_feature_code_identity,
                             runtime_identity=adaptive_runtime_identity,
+                            static_encoder_contract=static_encoder_contract,
                         )
                         feature_cache_key = hashlib.sha256(
                             feature_cache_signature.encode("utf-8")
@@ -1454,6 +1590,46 @@ if __name__ == "__main__":
                             ),
                             "signature": json.loads(feature_cache_signature),
                         }
+                        if adaptive_graph_enabled and args.reuse_static_cache_dir:
+                            legacy_signatures = {}
+                            legacy_skip_reason = None
+                            if cache_manifest["signature"]["split_seed"] == 42:
+                                try:
+                                    assert_known_static_extractor_compatibility(
+                                        adaptive_feature_code_identity
+                                    )
+                                except ValueError as error:
+                                    legacy_skip_reason = str(error)
+                                else:
+                                    for family, architecture in (
+                                        ("neurosigvia_97ade80", NEUROSIGVIA_CACHE_ARCHITECTURE),
+                                        ("timemosaic_7f38ff7", KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE),
+                                    ):
+                                        previous_signature = _known_legacy_adaptive_cache_signature(
+                                            args, dataset, channels, p, family=family,
+                                            split_audit_sha256=split_audit_sha256,
+                                            split_input_identity=adaptive_split_identity,
+                                            runtime_identity=adaptive_runtime_identity,
+                                            static_encoder_contract=static_encoder_contract,
+                                        )
+                                        legacy_signatures[previous_signature] = architecture
+                            cache_manifest["static_cache_reuse"] = promote_adaptive_static_caches(
+                                destination_dir=feature_cache_dir,
+                                signature=feature_cache_signature,
+                                legacy_signatures=legacy_signatures,
+                                search_root=args.reuse_static_cache_dir,
+                                split_loaders={
+                                    "train": (train_loader, train_labels),
+                                    "vali": (vali_loader, vali_labels),
+                                    "test": (test_loader, test_labels),
+                                },
+                                channels=channels,
+                                window_size=args.outer_patch_size,
+                                stride=args.outer_patch_stride,
+                            )
+                            if legacy_skip_reason is not None:
+                                cache_manifest["static_cache_reuse"]["legacy_skip_reason"] = legacy_skip_reason
+                                print(legacy_skip_reason)
                         manifest_path = Path(result_dir) / (
                             f"{dataset}_feature_cache_manifest.json"
                         )
@@ -1532,7 +1708,15 @@ if __name__ == "__main__":
                                 gate_temperature=(
                                     args.granularity_gate_temperature
                                 ),
-                                channel_mix=args.med_activity_channel_mix,
+                                activity_graph_canvas_size=(
+                                    args.activity_graph_canvas_size
+                                ),
+                                activity_graph_line_width=(
+                                    args.activity_graph_line_width
+                                ),
+                                activity_graph_vertical_margin=(
+                                    args.activity_graph_vertical_margin
+                                ),
                                 selector_balance_weight=(
                                     args.granularity_balance_weight
                                 ),

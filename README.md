@@ -1,8 +1,8 @@
 # NeuroSigVIA
 
 **NeuroSigVIA** is a multimodal framework for EEG and wearable-sensor
-time-series classification. Its adaptive granularity module learns the
-Activity Graph granularity before graph rendering, combines line-plot and
+time-series classification. Its adaptive granularity module selects
+piecewise-mean waveforms before Activity Graph rendering, combines line-plot and
 Activity-Graph visual features with cross-attention, and aligns the resulting
 visual representation with frozen Mantis-8M temporal features.
 
@@ -184,10 +184,13 @@ sequence:
 
 1. Split every channel into four 16-sample regions and use a hard
    straight-through categorical gate to choose granularity 4, 8, or 16 for
-   each region.
-2. Apply the selected maps before cross-channel propagation and render exactly
-   one adaptive Activity Graph. Render the line plot from the same window in
-   parallel.
+   each region. Replace each selected block with its mean to form a
+   piecewise-mean waveform of the original length.
+2. Apply Yang et al.'s Algorithm 1 signal order, which covers every unordered
+   signal pair in adjacent positions. Algorithm 3 draws the cyclic previous,
+   current and next waveforms in three columns at each position. Render one
+   `360 x 360` Activity Graph and resize it to `224 x 224` for OpenCLIP.
+   Render the line plot from the same window in parallel.
 3. Encode both images with the shared frozen OpenCLIP backbone. Use the pooled
    line feature as Query and the 4 x 4 Activity Graph spatial tokens as 16
    Key/Value tokens in cross-attention.
@@ -200,8 +203,14 @@ sequence:
    repository's existing `concat_attn` interaction; the InfoNCE branch remains
    a training objective.
 
-See [source and adaptation credits](SOURCE_NOTES.md) for the gate's upstream
-reference and the boundaries of its adaptation.
+The graph layout follows Algorithms 1 and 3 of
+[Yang et al. (IEEE TII, 2022)](https://doi.org/10.1109/TII.2022.3142315).
+The original rasterization details are not fully specified; plot bounds,
+line width and differentiable drawing are explicit implementation choices.
+The granularity gate and fusion remain NeuroSigVIA additions, so these
+components do not constitute a complete AGCNN reproduction. See
+[source and adaptation credits](SOURCE_NOTES.md) for both paper sources and
+their implementation boundaries.
 
 Each method has one script with a direct Python classification command, following Medformer's method-script layout. Each entry runs all five datasets for training seeds 42, 43 and 44:
 
@@ -266,6 +275,15 @@ Optional gate loading and freezing use `--granularity_gate_checkpoint` and
 `--granularity_freeze_gate`; add these options to the Python command inside
 `scripts/NeuroSigVIA.sh` when needed.
 
+The script searches `feature_cache/` for reusable raw-window, line-plot and
+Mantis features. Set `REUSE_STATIC_CACHE_DIR` to search another cache root.
+Reuse checks the ordered inputs and splits, encoder checkpoints, software,
+and static extraction code; online graph and gate settings are outside this
+static cache identity. Two audited historical cache formats can be copied to
+the new format after every raw window, validity mask, length and label matches
+the current loader. Source caches are retained. Graph-derived embeddings and
+old graph-model checkpoints are invalidated by the new graph implementation.
+
 ### Source modules
 
 Current method components are organized by function. The Medformer baseline
@@ -276,12 +294,12 @@ and the other five baseline implementations are under `third_party/medformer/`.
 | `runners/neurosigvia.py`, `runners/baselines.py` | Current method and baseline training entry points |
 | `data_loading/experiment.py` | Shared baseline data loading and subject-split integrity checks |
 | `src/temporal_granularity.py` | Pre-render 4/8/16 region gate and gate checkpoint provenance |
-| `src/adaptive_activity_graph.py` | Differentiable adaptive Activity Graph renderer |
+| `src/adaptive_activity_graph.py` | Gate-selected piecewise-mean waveforms rendered with the paper's Activity Graph layout |
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
 | `scripts/NeuroSigVIA.sh` and six baseline method scripts | Five datasets and three seeds per method |
-| `src/activity_graph.py` | Shared graph-rendering primitives, fixed MedActivity transforms and candidate graph banks |
+| `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |
 | `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |
 | `src/patch_mindts.py`, `src/mlp_classifier.py` | Shared window, encoder and fusion utilities, plus retained Patch-MindTS / Router paths |
 

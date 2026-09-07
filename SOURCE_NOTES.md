@@ -18,15 +18,17 @@ from TimeMosaic:
   decision with gradients through the corresponding soft probabilities.
 
 `AdaptiveGranularityGate` chooses Activity Graph granularities `4/8/16`
-for channel-wise 16-sample regions. The chosen numeric activity maps are
-combined before channel propagation, so `AdaptiveActivityGraphRenderer`
-renders one adaptive Activity Graph per input window.
+for channel-wise 16-sample regions. Each candidate replaces consecutive
+blocks of the corresponding length with their mean, preserving the region's
+16-sample length. The gate selects one candidate waveform per region before
+`AdaptiveActivityGraphRenderer` draws one Activity Graph per input window.
+This waveform preparation and the gate's placement before rendering are
+NeuroSigVIA adaptations.
 
-The RMS/variation activity statistics, activity-map construction, channel
-propagation, pair-covering row order, image normalization and RGB rendering
-are NeuroSigVIA components. Line-query/graph-key-value cross-attention,
-visual-temporal InfoNCE, final `concat_attn` fusion and classification are
-also NeuroSigVIA components. This adaptation does not embed the complete
+Line-query/graph-key-value cross-attention, visual-temporal InfoNCE, final
+`concat_attn` fusion and classification are NeuroSigVIA components. The
+Activity Graph layout has a separate paper source described below. This
+adaptation does not embed the complete
 TimeMosaic forecasting model, its embedding, encoder, forecasting head or
 auxiliary objective. The upstream repository, commit, component and
 adaptation boundary are recorded in `src/provenance.py` and the gate's
@@ -37,15 +39,36 @@ rendered and encoded graph candidates. Its checkpoints and results do not
 establish results for the current pre-render architecture. Historical code
 remains available from Git history and existing historical worktrees.
 
-## Shared graph and routing components
+## Activity Graph layout and rendering
 
-The fixed renderer and candidate graph bank retain the earlier Medformer-inspired
-patching and cross-channel activity design; they are image transforms, not the
-Medformer classifier. Shared optional router paths retain per-window decisions,
-multiple scale experts, noisy top-k routing and load-balancing patterns originally
-described as TimeMosaic- and Pathformer-inspired. These shared utilities are not
-complete upstream forecasting models. They remain separate from the current
-pre-render adaptive granularity gate.
+The waveform layout in `src/activity_graph.py` implements Algorithms 1 and 3
+from P. Yang, C. Yang, V. Lanfranchi and F. Ciravegna,
+[*Activity Graph Based Convolutional Neural Network for Human Activity
+Recognition Using Acceleration and Gyroscope Data*](https://doi.org/10.1109/TII.2022.3142315),
+IEEE Transactions on Industrial Informatics, 18(10), 2022:
+
+- Algorithm 1 extends a deterministic signal order until every unordered
+  signal pair occurs in adjacent positions. Tensor indices are zero-based.
+- Algorithm 3 draws the previous, current and next signals in three columns
+  for each position in that order, with cyclic neighbors at the boundaries.
+
+The paper reports a `360 x 360` image. This implementation draws a grayscale
+waveform image, repeats it over RGB channels, and resizes it to `224 x 224`
+with bilinear interpolation for the visual encoder. The original plotting
+bounds, line width and rasterization details are not fully specified. The
+per-signal min/max plot bounds, 0.05 vertical margin, one-pixel nominal line
+width measured in the intermediate lane raster and differentiable Gaussian
+stroke rasterizer over all valid sample-to-sample segments are explicit engineering
+choices in this implementation. Every row is rasterized with at least eight
+vertical samples before area reduction to 360, so high channel counts do not
+omit entire rows. Pixel-identical reproduction is not claimed.
+
+The adaptive branch supplies its selected piecewise-mean waveforms to this
+layout. NeuroSigVIA combines the gate with frozen OpenCLIP/Mantis encoders
+and its fusion objectives. This is an implementation of the cited graph
+layout within NeuroSigVIA, not a reproduction of the complete AGCNN model and training
+pipeline. Fixed rendering and candidate graph banks share the same waveform
+layout; optional selector utilities retain their own adaptation boundaries.
 
 ## Baseline models
 

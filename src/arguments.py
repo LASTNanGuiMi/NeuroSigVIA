@@ -27,9 +27,9 @@ def parse_med_activity_patch_lengths(value):
             "Med activity patch lengths must be comma-separated integers."
         ) from exc
 
-    if len(patch_lengths) != 3:
+    if len(patch_lengths) != 1:
         raise argparse.ArgumentTypeError(
-            "Med activity graphs require exactly three patch lengths for RGB encoding."
+            "Paper waveform graphs accept one smoothing scale (1 means raw waveform)."
         )
     if any(length <= 0 for length in patch_lengths):
         raise argparse.ArgumentTypeError("Med activity patch lengths must be positive.")
@@ -56,10 +56,9 @@ def parse_med_activity_granularity_bank(value):
             raise argparse.ArgumentTypeError(
                 "Granularity experts must contain comma-separated integers."
             ) from exc
-        if len(patch_lengths) not in {1, 3}:
+        if len(patch_lengths) != 1:
             raise argparse.ArgumentTypeError(
-                "Each granularity expert must contain one single scale or "
-                "three legacy RGB scales."
+                "Each paper waveform expert must contain one smoothing scale."
             )
         if any(length <= 0 for length in patch_lengths):
             raise argparse.ArgumentTypeError(
@@ -156,10 +155,9 @@ def parse_args():
     parser.add_argument(
         "--med_activity_patch_lengths",
         type=parse_med_activity_patch_lengths,
-        default=(2, 4, 8),
+        default=(1,),
         help=(
-            "Three increasing comma-separated patch lengths mapped to the red, "
-            "green, and blue planes of med_activity_graph"
+            "One fixed smoothing block length for paper waveform graphs; 1 uses raw signals"
         ),
     )
 
@@ -167,21 +165,21 @@ def parse_args():
         "--med_activity_channel_mix",
         type=float,
         default=0.35,
-        help="Cross-channel propagation strength used by med_activity_graph",
+        help="Deprecated compatibility option; paper Activity Graph does not propagate channel values",
     )
 
     parser.add_argument(
         "--med_activity_router_temperature",
         type=float,
         default=0.2,
-        help="Softmax temperature for cross-scale router exchange",
+        help="Deprecated compatibility option; unused by the paper waveform renderer",
     )
 
     parser.add_argument(
         "--med_activity_router_mix",
         type=float,
         default=0.5,
-        help="Strength of cross-scale router exchange used by med_activity_graph",
+        help="Deprecated compatibility option; unused by the paper waveform renderer",
     )
 
     parser.add_argument(
@@ -198,11 +196,7 @@ def parse_args():
         type=parse_med_activity_granularity_bank,
         default=None,
         help=(
-            "Semicolon-separated graph experts. A single number denotes one "
-            "neutral-RGB scale, for example '4;8;16'; three comma-separated "
-            "numbers retain the legacy multi-scale RGB renderer. Defaults are "
-            "mode-specific: '4;8;16' for patch_mindts and the legacy bank for "
-            "sample-level routing"
+            "Semicolon-separated fixed waveform smoothing scales, e.g. 4;8;16."
         ),
     )
 
@@ -716,6 +710,33 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--activity_graph_canvas_size",
+        type=int,
+        default=360,
+        help=(
+            "Square reference raster used for the Yang et al. Activity Graph; "
+            "the paper reports 360 by 360"
+        ),
+    )
+
+    parser.add_argument(
+        "--activity_graph_line_width",
+        type=float,
+        default=1.0,
+        help="Waveform line width in reference-canvas pixels",
+    )
+
+    parser.add_argument(
+        "--activity_graph_vertical_margin",
+        type=float,
+        default=0.05,
+        help=(
+            "Explicit per-lane plotting margin used because the paper does not "
+            "report waveform axis bounds"
+        ),
+    )
+
+    parser.add_argument(
         "--granularity_gate_checkpoint",
         type=str,
         default=None,
@@ -871,6 +892,11 @@ def parse_args():
             "features are reused by subsequent runs with matching labels and branches."
         ),
     )
+    parser.add_argument(
+        "--reuse_static_cache_dir",
+        default=None,
+        help="Optional existing cache root to search for strictly validated raw/line/Mantis cache reuse",
+    )
 
     parser.add_argument(
         "--batch_size", type=int, default=128, help="Batch size for dataloader"
@@ -987,14 +1013,7 @@ def parse_args():
 
     args = parser.parse_args(normalize_cli_arguments(sys.argv[1:]))
     if args.med_activity_granularity_bank is None:
-        if args.modal_interaction == "patch_mindts":
-            args.med_activity_granularity_bank = ((4,), (8,), (16,))
-        else:
-            args.med_activity_granularity_bank = (
-                (1, 2, 4),
-                (2, 4, 8),
-                (4, 8, 16),
-            )
+        args.med_activity_granularity_bank = ((4,), (8,), (16,))
     if args.med_activity_granularity_temperature is None:
         args.med_activity_granularity_temperature = 1.0
     if args.med_activity_granularity_entropy_weight is None:
@@ -1234,6 +1253,19 @@ def parse_args():
             "--granularity_graph_token_grid must be at least 2 so cross-attention "
             "has more than one graph K/V token"
         )
+    if args.activity_graph_canvas_size < 3 or args.activity_graph_canvas_size % 3:
+        parser.error("--activity_graph_canvas_size must be a multiple of three")
+    if (
+        not math.isfinite(args.activity_graph_line_width)
+        or args.activity_graph_line_width <= 0.0
+    ):
+        parser.error("--activity_graph_line_width must be positive and finite")
+    if (
+        not math.isfinite(args.activity_graph_vertical_margin)
+        or args.activity_graph_vertical_margin < 0.0
+        or args.activity_graph_vertical_margin >= 0.5
+    ):
+        parser.error("--activity_graph_vertical_margin must lie in [0, 0.5)")
     if args.granularity_freeze_gate and not args.granularity_gate_checkpoint:
         parser.error(
             "--granularity_freeze_gate requires --granularity_gate_checkpoint"
@@ -1254,7 +1286,7 @@ def parse_args():
                 "--med_activity_adaptive_granularity requires at least one ViT branch"
             )
         if (
-            args.modal_interaction != "patch_mindts"
+            any(len(regime) != 1 for regime in args.med_activity_granularity_bank)
             and args.med_activity_granularity_bank.count(
                 args.med_activity_patch_lengths
             )
@@ -1302,10 +1334,9 @@ def parse_args():
         regime_widths = {
             len(regime) for regime in args.med_activity_granularity_bank
         }
-        if len(regime_widths) != 1 or not regime_widths.issubset({1, 3}):
+        if regime_widths != {1}:
             parser.error(
-                "patch_mindts requires either three single-scale experts or "
-                "three legacy three-scale RGB experts"
+                "patch_mindts requires three single-scale waveform experts"
             )
         if len(set(args.med_activity_granularity_bank)) != 3:
             parser.error(
