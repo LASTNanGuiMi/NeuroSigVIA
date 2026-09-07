@@ -17,3 +17,6 @@ torch==2.7.1
 torchvision==0.22.1
 tqdm==4.67.1
 transformers==4.33.3
+
+# Source-identical Medformer model imports.
+-r third_party/medformer/requirements.txt

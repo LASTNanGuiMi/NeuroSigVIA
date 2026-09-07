@@ -1,7 +1,7 @@
 # Wearable dataset processing protocols
 
 The two maintained clinical datasets are stored under `data/wearable/` and
-launched through `scripts/shimmer10.sh` and `scripts/pads11.sh`.
+launched together through `scripts/NeuroSigViT.sh`.
 
 | Key | Dataset | Input tensor | Split | Labels | Normalization |
 |---|---|---|---|---|---|
@@ -10,22 +10,22 @@ launched through `scripts/shimmer10.sh` and `scripts/pads11.sh`.
 
 Shimmer and PADS use the subject IDs in `Meta/subject_map.csv`; the split audit
 written with each run records the original and mapped labels. The fixed
-data-split seed is 42 in both loaders. The current scripts explicitly set
-`--random_seed 42` for model initialization and training randomness; this
-option does not replace the fixed split seed.
+data-split seed is 42 in both loaders. The current method scripts use training
+seeds 42, 43 and 44 by default. Set `SEEDS` to choose training seeds; this
+does not replace the fixed split seed.
 
 Run examples:
 
 ```bash
 conda activate neurosigvit
-CUDA_VISIBLE_DEVICES=0 bash scripts/shimmer10.sh
-CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
+CUDA_VISIBLE_DEVICES=0 DATASETS=shimmer10 bash scripts/NeuroSigViT.sh
+CUDA_VISIBLE_DEVICES=0 DATASETS=pads11 bash scripts/NeuroSigViT.sh
 ```
 
-Run a selected command from the repository root on an available GPU. Edit
-`--data_dir` if the compatible wearable dataset wrapper is stored elsewhere.
-Training parameters and cache/result paths are written directly in each
-script. Additional `main.py` arguments can be appended to the invocation.
+Run a selected command from the repository root on an available GPU. Set
+`WEARABLE_DATA_ROOT` if the compatible dataset wrapper is stored elsewhere.
+Training parameters are visible in each method script. Results and cache paths
+are generated per run tag, training seed and dataset.
 
 The commands use the active `neurosigvit` environment described in `README.md`.
 

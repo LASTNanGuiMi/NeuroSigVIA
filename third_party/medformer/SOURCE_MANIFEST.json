@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/DL4mHealth/Medformer.git",
+  "commit": "446275f27b713a9f09917a6ba0bc51a18e921597",
+  "changes": "none; model/dependency files copied byte-for-byte",
+  "sha256": {
+    "LICENSE": "bc37bc952cdd910835c1dc86b9194f17516aacce13c7f04d873aa8cfb62443ca",
+    "models/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "models/Medformer.py": "55487af5eb2314789de4f56bcf14970949ce505faf5ada67bb4f1086d9152d58",
+    "models/Crossformer.py": "68044eb3ccb0a7ad136424a58b32c70ddcb71906c2b6fbf457df1e66fc08c296",
+    "models/FEDformer.py": "08b1e8f26bd6498557a2df1b2b8f43da8ae05c48d2b2886bd1f56489591806de",
+    "models/Autoformer.py": "a90f7fb9dcc6d411335d05b6843a736bf9918915f5700696cad1721d9a0dc6d1",
+    "models/PatchTST.py": "e107d66d7a428b8e49558b5f946f3ca5c3ae2912f43c7dfba562e0bdf7428ac6",
+    "models/Transformer.py": "7d3c91a330052887abc7f6ff39bfd344b2218803ca2ea5eceb3994ad8569dbe4",
+    "layers/Medformer_EncDec.py": "b1a9e1a863a275f9799de893d818fedfcdba5d4dcc70f7fd51121f50a1cf408a",
+    "layers/SelfAttention_Family.py": "d4a13c77149bf77cb452a28fa7675edae859298162d6c7596f29744207719d63",
+    "layers/Embed.py": "b41aad875ea142bdad59edb420f101d6f21920ddadc2c52f0459da89d3350693",
+    "layers/Crossformer_EncDec.py": "9e864e65220b93d8572d3d08a4b39b241899be38f9b76b04bbf2fdd3d7647145",
+    "layers/Transformer_EncDec.py": "cb24a9a94eadff626d826463b28e3a89aa37aba1b724a3f460526c263118b336",
+    "layers/AutoCorrelation.py": "0491f29e5a6cc70f25d3fd53e28e039868a2302395c16144db9e550a24144e96",
+    "layers/Autoformer_EncDec.py": "9d3e7fb449c0025df297de3371bf88dd7551cf4b3d9a156a5a8f1abb85df025a",
+    "layers/FourierCorrelation.py": "6003208bcb61d1d5c105aa4cd617f11a6b3a3ec02c01195016a77c9dcc7b9125",
+    "layers/MultiWaveletCorrelation.py": "12bac01955cb2d837ed506d97f455044364d7ade07d89e7e48fb091581561901",
+    "layers/Augmentation.py": "570672b6b8f9ef99842012f1620997b8d7a7e7a63c3e642250db5f46a1769334",
+    "utils/masking.py": "593d60aeaeaa9528133cb072c35f8be739c7069ab20c67f288ce8c8288cb80ad",
+    "layers/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

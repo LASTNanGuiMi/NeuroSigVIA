@@ -214,3 +214,10 @@ dataset.zip*
 /backups/
 /experiment_snapshots/
 /Checkpoint/
+
+# Runtime queue state is local; these two directories contain required source.
+/status/
+!/scripts/lib/
+!/scripts/lib/experiments.sh
+!/third_party/medformer/models/
+!/third_party/medformer/models/*.py

@@ -19,8 +19,7 @@ The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 | `pads11` | `PADS_11_task08_TouchIndex` | `(N,6,976)` | subject-level 280/92/97 source split; Healthy versus Parkinson uses 212/70/73 after excluding OMD |
 
 The selected wearable protocols use a fixed data-split seed of 42. The current
-TimeMosaic scripts use model seed 42. To change it, edit `--random_seed` and
-the cache/result directory arguments in the selected script. Training-only statistics are used
+method scripts default to training seeds 42, 43 and 44. Change `SEEDS` to select training seeds; output and cache paths follow automatically. Training-only statistics are used
 whenever normalization is required. See `DATA_PROCESSING.md` for the
 full protocol.
 
@@ -29,6 +28,8 @@ full protocol.
 ```text
 NeuroSigViT-main/
 |-- main.py
+|-- run_baseline.py
+|-- third_party/medformer/
 |-- run_selector_comparison.py
 |-- selector_host.py
 |-- selector_policies/
@@ -55,12 +56,14 @@ NeuroSigViT-main/
 |-- data_loading/
 |   `-- split_reference_seed42.csv
 |-- scripts/
-|   |-- adftd.sh
-|   |-- tdbrain.sh
-|   |-- apava.sh
-|   |-- shimmer10.sh
-|   |-- pads11.sh
-|   `-- run_timemosaic_graph.sh  # compatibility entry for existing job launchers
+|   |-- NeuroSigViT.sh
+|   |-- Medformer.sh
+|   |-- Crossformer.sh
+|   |-- FEDformer.sh
+|   |-- Autoformer.sh
+|   |-- PatchTST.sh
+|   |-- Transformer.sh
+|   `-- lib/experiments.sh
 |-- reproduction/
 |   |-- prepare_assets.py
 |   |-- evaluate_checkpoint.py
@@ -78,7 +81,7 @@ remain on the server and are excluded from this source release.
 This repository contains both the current pre-render adaptive Activity Graph
 path and the archived post-encoding selector comparison. Machine-local dataset
 and checkpoint paths for the current method are written directly in each
-dataset script as command-line arguments.
+method script as command-line arguments.
 
 ## Environment
 
@@ -97,7 +100,7 @@ non-interactive `python` is not the training environment.
 
 ## Checkpoints
 
-The dataset scripts use these existing model entries relative to the repository:
+The NeuroSigViT script uses these existing model entries relative to the repository:
 
 ```text
 ../models/CLIP-ViT-H-14-laion2B-s32B-b79K
@@ -151,7 +154,7 @@ and test data.
 Run only this endpoint with:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
+DATASETS=pads11 GPUS=0 bash scripts/NeuroSigViT.sh
 ```
 
 ## Running experiments
@@ -186,34 +189,37 @@ Activity-map construction, channel propagation, rendering, cross-attention,
 InfoNCE, and classification are NeuroSigViT components; this path does not
 embed the complete TimeMosaic forecasting model.
 
-Each dataset has one short script containing a direct `python -u main.py`
-command. From the repository root, activate the environment and choose a dataset:
+Each method has one script with a direct Python classification command, following Medformer's method-script layout. Each entry runs all five datasets for training seeds 42, 43 and 44:
 
 ```bash
 conda activate neurosigvit
-
-CUDA_VISIBLE_DEVICES=0 bash scripts/adftd.sh
-CUDA_VISIBLE_DEVICES=0 bash scripts/tdbrain.sh
-CUDA_VISIBLE_DEVICES=0 bash scripts/apava.sh
-CUDA_VISIBLE_DEVICES=0 bash scripts/shimmer10.sh
-CUDA_VISIBLE_DEVICES=0 bash scripts/pads11.sh
+bash scripts/NeuroSigViT.sh
 ```
 
-Run the selected line on an available GPU. Running all five lines executes the
-datasets sequentially. The scripts use the existing `data/eeg/processed` and
-`data/wearable` entries; the wearable entry points to the compatible dataset
-wrapper. Point these entries at your local datasets and keep the model entries
-listed above; no model/data-path exports are required.
+The six comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`, `Autoformer.sh`, `PatchTST.sh`, and `Transformer.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. Model sources are copied unchanged from Medformer into `third_party/medformer/`, including their MIT license, commit and per-file hashes. Install the additional import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
 
-The overridden training settings are visible in the selected `.sh` file. Batch sizes are
-8 for ADFTD/TDBRAIN/APAVA, 1 for Shimmer10, and 4 for PADS11. Each script uses
-seed 42, 100 epochs, and the existing early-stopping/scheduler configuration.
-Unspecified options retain the defaults in `src/arguments.py`.
+Defaults use GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
-Additional `main.py` arguments may be appended to a script invocation. For
-example, append `--mlp_lr 1e-4` to change the learning rate. When changing the
-seed, also set `--feature_cache_dir` and `--result_dir` to the intended run
-directories; these are explicit paths in the short scripts.
+```bash
+tmux new-session -d -s neurosigvit env PYTHON_BIN="$(command -v python)" bash scripts/NeuroSigViT.sh
+```
+
+To select datasets, seeds or GPUs, or inspect the full commands without launching:
+
+```bash
+SEEDS="42 43 44" DATASETS="adftd apava" GPUS="0 1" bash scripts/NeuroSigViT.sh
+GPUS=0 SEEDS=43 DATASETS=pads11 bash scripts/Medformer.sh
+DRY_RUN=1 bash scripts/NeuroSigViT.sh
+WAIT_FOR_GPUS=1 bash scripts/NeuroSigViT.sh
+```
+
+`CUDA_VISIBLE_DEVICES=0 bash scripts/Medformer.sh` also runs the whole method batch sequentially on physical GPU 0. Explicit `GPUS` takes precedence. Activate the environment or set `PYTHON_BIN` to its absolute interpreter. When a selected GPU is occupied, the default exits before launching; `WAIT_FOR_GPUS=1` keeps each dataset queued until its GPU is free, with status `WAITING_FOR_GPU`.
+
+Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, select their `DATASETS`/`SEEDS` with a new run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
+
+The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. Defaults are 100 epochs with existing early stopping (warmup 10, patience 12) and batch sizes 8/8/8/1/4. Both trainers select on validation subject Macro-F1. Baselines use AdamW, balanced cross entropy, mean subject probabilities and one final test evaluation after restoring the best checkpoint. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
+
+Hyperparameters are visible in each method script. The six baseline scripts supply a shared starting configuration, not original-paper tuned settings or completed benchmark results. Edit method parameters or append supported hyperparameter arguments; dataset, seed and output fields are controlled by the batch scheduler. For example `bash scripts/NeuroSigViT.sh --mlp_lr 1e-4` or `bash scripts/Medformer.sh --learning_rate 1e-4`.
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
@@ -223,14 +229,6 @@ This path is selected only by
 `--modal_interaction patch_timemosaic_graph`. Do not add
 `--med_activity_adaptive_granularity`: that flag activates the historical
 post-encoding graph bank and is rejected for the current path.
-
-The existing `run_timemosaic_graph.sh` is retained unchanged for compatibility
-with automated jobs. Its dataset-key invocation and dry-run behavior remain
-available:
-
-```bash
-DRY_RUN=1 bash scripts/run_timemosaic_graph.sh adftd
-```
 
 Historical Activity Graph, Patch-MindTS, GPU-waiting, batch-launching, and
 Router-v4 analysis scripts have been removed from the current `scripts/`
@@ -285,8 +283,7 @@ selection, and Patch-MindTS / Router development paths.
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/timemosaic_patch_pipeline.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/timemosaic_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/adftd.sh`, `tdbrain.sh`, `apava.sh`, `shimmer10.sh`, `pads11.sh` | Direct per-dataset commands for the current method |
-| `scripts/run_timemosaic_graph.sh` | Compatibility launcher for existing automated jobs |
+| `scripts/NeuroSigViT.sh` and six baseline method scripts | Five datasets and three seeds per method |
 | `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |
 | `src/patch_mindts.py` | Patch-MindTS and Router implementation |
 | `selector_policies/timemosaic.py` | TimeMosaic-style adaptive granularity selector |

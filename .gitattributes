@@ -1,0 +1,7 @@
+*.sh text eol=lf
+
+# Keep upstream model/dependency bytes and formatting intact.
+third_party/medformer/models/** -text -whitespace
+third_party/medformer/layers/** -text -whitespace
+third_party/medformer/utils/** -text -whitespace
+third_party/medformer/LICENSE -text -whitespace

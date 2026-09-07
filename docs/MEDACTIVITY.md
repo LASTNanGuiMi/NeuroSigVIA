@@ -45,9 +45,8 @@ checkpoint contents can be hashed; use a local snapshot or disable
 These notes describe the historical fixed/post-encoding MedActivity paths.
 Their launch scripts remain available in Git history and the historical
 worktree. For current pre-render TimeMosaic reproduction, activate the
-`neurosigvit` environment and use `scripts/adftd.sh`, `scripts/tdbrain.sh`,
-`scripts/apava.sh`, `scripts/shimmer10.sh`, or `scripts/pads11.sh` as described
-in the main README.
+`neurosigvit` environment and use `scripts/NeuroSigViT.sh` as described in the
+main README.
 
 UCIHAR uses the official subject-disjoint protocol. FallTL is split by
 `(activity_code, trial_no)`, keeping the eight body-part recordings of one

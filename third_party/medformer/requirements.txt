@@ -1,0 +1,8 @@
+# Shared attention imports this package even for non-Reformer models.
+reformer-pytorch==1.4.4
+axial-positional-embedding==0.3.12
+local-attention==1.11.2
+hyper-connections==0.4.11
+torch-einops-utils==0.1.25
+product-key-memory==0.3.0
+colt5-attention==0.11.2
