@@ -19,7 +19,9 @@ The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 | `pads11` | `PADS_11_task08_TouchIndex` | `(N,6,976)` | subject-level 280/92/97 source split; Healthy versus Parkinson uses 212/70/73 after excluding OMD |
 
 The selected wearable protocols use a fixed data-split seed of 42. The current
-method scripts default to training seeds 42, 43 and 44. Change `SEEDS` to select training seeds; output and cache paths follow automatically. Training-only statistics are used
+method scripts default to training seeds 42, 43 and 44. Edit `SEEDS` at the top
+of the method script to select training seeds; output and cache paths follow
+automatically. Training-only statistics are used
 whenever normalization is required. See `DATA_PROCESSING.md` for the
 full protocol.
 
@@ -151,10 +153,12 @@ Healthy/Parkinson in the three partitions. Channel normalization statistics
 are fitted on the retained training samples only and then reused for validation
 and test data.
 
-Run only this endpoint with:
+To run only this endpoint, set `DATASETS="pads11"` and `GPUS="0"` at the top
+of `scripts/NeuroSigViT.sh`, then run:
 
 ```bash
-DATASETS=pads11 GPUS=0 bash scripts/NeuroSigViT.sh
+conda activate neurosigvit
+bash scripts/NeuroSigViT.sh
 ```
 
 ## Running experiments
@@ -201,25 +205,41 @@ The six comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`,
 Defaults use GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
 ```bash
-tmux new-session -d -s neurosigvit env PYTHON_BIN="$(command -v python)" bash scripts/NeuroSigViT.sh
+tmux new-session -s neurosigvit
+conda activate neurosigvit
+bash scripts/NeuroSigViT.sh
 ```
 
-To select datasets, seeds or GPUs, or inspect the full commands without launching:
+Set datasets, training seeds, GPU assignments and per-dataset batch sizes in
+`DATASETS`, `SEEDS`, `GPUS` and `BATCH_SIZES` at the top of the chosen method
+script. For example, use `DATASETS="adftd apava"`, `SEEDS="42"` and `GPUS="0 1"`
+there to train those two datasets once. Use `GPUS="0"` to run all selected
+datasets sequentially on GPU 0. Training hyperparameters, including learning
+rate, epochs and early stopping, are written in the script's Python command;
+edit those values in the script before launching.
+
+To inspect the full commands without launching:
 
 ```bash
-SEEDS="42 43 44" DATASETS="adftd apava" GPUS="0 1" bash scripts/NeuroSigViT.sh
-GPUS=0 SEEDS=43 DATASETS=pads11 bash scripts/Medformer.sh
 DRY_RUN=1 bash scripts/NeuroSigViT.sh
-WAIT_FOR_GPUS=1 bash scripts/NeuroSigViT.sh
 ```
 
-`CUDA_VISIBLE_DEVICES=0 bash scripts/Medformer.sh` also runs the whole method batch sequentially on physical GPU 0. Explicit `GPUS` takes precedence. Activate the environment or set `PYTHON_BIN` to its absolute interpreter. When a selected GPU is occupied, the default exits before launching; `WAIT_FOR_GPUS=1` keeps each dataset queued until its GPU is free, with status `WAITING_FOR_GPU`.
+Normal launches need no parameter prefixes or appended arguments. Optional
+runtime settings remain available for command inspection (`DRY_RUN`), choosing
+an interpreter (`PYTHON_BIN`), waiting for GPUs (`WAIT_FOR_GPUS`) and naming a
+run (`RUN_TAG`). When a selected GPU is occupied, the default exits before
+launching; enabling `WAIT_FOR_GPUS` keeps each dataset queued until its GPU is
+free, with status `WAITING_FOR_GPU`.
 
-Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, select their `DATASETS`/`SEEDS` with a new run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
+Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, edit `DATASETS` and `SEEDS` in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
 The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. Defaults are 100 epochs with existing early stopping (warmup 10, patience 12) and batch sizes 8/8/8/1/4. Both trainers select on validation subject Macro-F1. Baselines use AdamW, balanced cross entropy, mean subject probabilities and one final test evaluation after restoring the best checkpoint. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
-Hyperparameters are visible in each method script. The six baseline scripts supply a shared starting configuration, not original-paper tuned settings or completed benchmark results. Edit method parameters or append supported hyperparameter arguments; dataset, seed and output fields are controlled by the batch scheduler. For example `bash scripts/NeuroSigViT.sh --mlp_lr 1e-4` or `bash scripts/Medformer.sh --learning_rate 1e-4`.
+The six baseline scripts supply a shared starting configuration, not
+original-paper tuned settings or completed benchmark results. Keep
+hyperparameter changes in the corresponding method script so the same
+`bash scripts/<Method>.sh` command reproduces its saved configuration. The
+batch scheduler derives output paths from the method, dataset, seed and run tag.
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,

@@ -4,14 +4,14 @@
 configure_dataset() {
   DATA_ARGS=()
   case "$1" in
-    adftd) DATASET_NAME=ADFTD; DATASET_GROUP=eeg; DEFAULT_BATCH_SIZE=8 ;;
-    tdbrain) DATASET_NAME=TDBRAIN; DATASET_GROUP=eeg; DEFAULT_BATCH_SIZE=8 ;;
-    apava) DATASET_NAME=APAVA; DATASET_GROUP=eeg; DEFAULT_BATCH_SIZE=8 ;;
+    adftd) DATASET_NAME=ADFTD; DATASET_GROUP=eeg ;;
+    tdbrain) DATASET_NAME=TDBRAIN; DATASET_GROUP=eeg ;;
+    apava) DATASET_NAME=APAVA; DATASET_GROUP=eeg ;;
     shimmer10)
-      DATASET_NAME=Shimmer_10_session10_AFC; DATASET_GROUP=wearable; DEFAULT_BATCH_SIZE=1
+      DATASET_NAME=Shimmer_10_session10_AFC; DATASET_GROUP=wearable
       DATA_ARGS=(--wearable_label_mode shimmer_hc_vs_pd) ;;
     pads11)
-      DATASET_NAME=PADS_11_task08_TouchIndex; DATASET_GROUP=wearable; DEFAULT_BATCH_SIZE=4
+      DATASET_NAME=PADS_11_task08_TouchIndex; DATASET_GROUP=wearable
       DATA_ARGS=(--wearable_label_mode pads_pd_vs_hc) ;;
     *) printf 'Unknown dataset: %s\n' "$1" >&2; return 2 ;;
   esac
@@ -21,7 +21,11 @@ configure_dataset() {
   else
     DATA_ROOT="${WEARABLE_DATA_ROOT:-${NEUROSIGVIT_WEARABLE_ROOT:-$PROJECT_DIR/data/wearable}}"
   fi
-  TRAIN_BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
+  TRAIN_BATCH_SIZE="${BATCH_SIZES[$1]:-}"
+  if [[ ! "$TRAIN_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Set a positive BATCH_SIZES[%s] in the method script.\n' "$1" >&2
+    return 2
+  fi
 }
 
 run_python() {
@@ -122,9 +126,9 @@ run_experiments() {
   PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
   cd -- "$PROJECT_DIR"
   PYTHON_BIN="${PYTHON_BIN:-python}"
-  read -r -a SEED_VALUES <<< "${SEEDS:-42 43 44}"
-  read -r -a DATASET_KEYS <<< "${DATASETS:-adftd tdbrain apava shimmer10 pads11}"
-  local gpu_list="${GPUS:-${CUDA_VISIBLE_DEVICES:-0 1 2 3 4}}"
+  read -r -a SEED_VALUES <<< "$SEEDS"
+  read -r -a DATASET_KEYS <<< "$DATASETS"
+  local gpu_list="$GPUS"
   read -r -a GPU_IDS <<< "${gpu_list//,/ }"
   [[ ${#SEED_VALUES[@]} -gt 0 && ${#DATASET_KEYS[@]} -gt 0 && ${#GPU_IDS[@]} -gt 0 ]] || return 2
   local value seen=' ' kind
@@ -145,7 +149,7 @@ run_experiments() {
   for value in "$@"; do
     case "$value" in
       --random_seed|--random_seed=*|--result_dir|--result_dir=*|--feature_cache_dir|--feature_cache_dir=*|--dataset|--dataset=*|--datasets|--datasets=*|--dataset_names|--dataset_names=*|--model|--model=*|--data_dir|--data_dir=*|--wearable_label_mode|--wearable_label_mode=*|--eeg_protocol|--eeg_protocol=*|--eeg_normalization|--eeg_normalization=*)
-        printf 'Set dataset/seed/path with DATASETS, SEEDS and RUN_TAG; reserved argument: %s\n' "$value" >&2; return 2 ;;
+        printf 'Edit DATASETS/SEEDS in the method script; output paths use RUN_TAG. Reserved argument: %s\n' "$value" >&2; return 2 ;;
     esac
   done
   local seed_label
@@ -174,7 +178,7 @@ run_experiments() {
   for gpu in "${GPU_IDS[@]}"; do
     nvidia-smi -i "$gpu" --query-gpu=index --format=csv,noheader >/dev/null || return 75
     if [[ "${WAIT_FOR_GPUS:-0}" != 1 ]]; then
-      gpu_is_free "$gpu" || { printf 'GPU %s is occupied; choose free GPUS or set WAIT_FOR_GPUS=1.\n' "$gpu" >&2; return 75; }
+      gpu_is_free "$gpu" || { printf 'GPU %s is occupied; edit GPUS in the method script or set WAIT_FOR_GPUS=1.\n' "$gpu" >&2; return 75; }
     fi
   done
   mkdir -p -- "$PROJECT_DIR/status"

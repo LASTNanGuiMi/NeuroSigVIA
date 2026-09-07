@@ -3,11 +3,16 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 source scripts/lib/experiments.sh
 
-# Five datasets: ADFTD, TDBRAIN, APAVA, Shimmer AFC, PADS TouchIndex.
-# Defaults: SEEDS="42 43 44", GPUS="0 1 2 3 4".
-# Usage: bash scripts/NeuroSigViT.sh
-#        SEEDS="43 44" DATASETS="adftd apava" GPUS="0 1" bash scripts/NeuroSigViT.sh
+# Run: bash scripts/NeuroSigViT.sh
+# Edit experiment settings here; training hyperparameters are below.
 model_name=NeuroSigViT
+DATASETS="adftd tdbrain apava shimmer10 pads11"
+SEEDS="42 43 44"
+GPUS="0 1 2 3 4"
+# Each dataset uses one GPU; its three seeds run sequentially.
+declare -A BATCH_SIZES=(
+  [adftd]=8 [tdbrain]=8 [apava]=8 [shimmer10]=1 [pads11]=4
+)
 
 train_one() {
   local dataset="$1" seed="$2" result="$3" cache="$4"
@@ -23,6 +28,7 @@ train_one() {
     --aggregation mean \
     --image_mode med_activity_graph \
     --med_activity_channel_mix 0.35 \
+    --med_activity_granularity_hidden_dim 64 \
     --mantis --mantis_name "${MANTIS_DIR:-${NEUROSIGVIT_MANTIS_PATH:-../models/Mantis-8M}}" \
     --classifier_type mlp \
     --modal_interaction patch_timemosaic_graph \
@@ -37,10 +43,11 @@ train_one() {
     --fusion_dim 128 --fusion_heads 2 --mlp_hidden_dim 128 \
     --mlp_num_layers 2 --mlp_dropout 0.1 \
     --mlp_lr 3e-4 --mlp_weight_decay 1e-3 --mlp_class_weight balanced \
-    --mlp_epochs "${EPOCHS:-100}" \
+    --mlp_epochs 100 \
     --mlp_early_stop_strategy raw_primary \
     --mlp_early_stop_warmup_epochs 10 \
-    --mlp_early_stop_patience "${PATIENCE:-12}" \
+    --mlp_early_stop_min_epochs 0 \
+    --mlp_early_stop_patience 12 \
     --mlp_early_stop_min_delta 0.002 \
     --mlp_lr_scheduler reduce_on_plateau \
     --mlp_lr_scheduler_patience 4 --mlp_lr_scheduler_factor 0.5 --mlp_lr_scheduler_min_lr 1e-6 \

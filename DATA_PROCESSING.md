@@ -11,21 +11,23 @@ launched together through `scripts/NeuroSigViT.sh`.
 Shimmer and PADS use the subject IDs in `Meta/subject_map.csv`; the split audit
 written with each run records the original and mapped labels. The fixed
 data-split seed is 42 in both loaders. The current method scripts use training
-seeds 42, 43 and 44 by default. Set `SEEDS` to choose training seeds; this
-does not replace the fixed split seed.
+seeds 42, 43 and 44 by default. Edit `SEEDS` at the top of the method script
+to choose training seeds; this does not replace the fixed split seed.
 
-Run examples:
+To run one wearable dataset on GPU 0, set `DATASETS="shimmer10"` or
+`DATASETS="pads11"` and `GPUS="0"` at the top of `scripts/NeuroSigViT.sh`,
+then run from the repository root:
 
 ```bash
 conda activate neurosigvit
-CUDA_VISIBLE_DEVICES=0 DATASETS=shimmer10 bash scripts/NeuroSigViT.sh
-CUDA_VISIBLE_DEVICES=0 DATASETS=pads11 bash scripts/NeuroSigViT.sh
+bash scripts/NeuroSigViT.sh
 ```
 
-Run a selected command from the repository root on an available GPU. Set
-`WEARABLE_DATA_ROOT` if the compatible dataset wrapper is stored elsewhere.
-Training parameters are visible in each method script. Results and cache paths
-are generated per run tag, training seed and dataset.
+Choose an available GPU in the script. Training parameters are written in
+each method script, with per-dataset batch sizes in `BATCH_SIZES` at the top.
+If the compatible dataset wrapper is stored elsewhere, the optional
+`WEARABLE_DATA_ROOT` runtime setting can select its path. Results and cache
+paths are generated per run tag, training seed and dataset.
 
 The commands use the active `neurosigvit` environment described in `README.md`.
 
