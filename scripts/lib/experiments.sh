@@ -16,10 +16,10 @@ configure_dataset() {
     *) printf 'Unknown dataset: %s\n' "$1" >&2; return 2 ;;
   esac
   if [[ "$DATASET_GROUP" == eeg ]]; then
-    DATA_ROOT="${EEG_DATA_DIR:-${NEUROSIGVIT_EEG_ROOT:-$PROJECT_DIR/data/eeg/processed}}"
+    DATA_ROOT="${EEG_DATA_DIR:-${NEUROSIGVIA_EEG_ROOT:-$PROJECT_DIR/data/eeg/processed}}"
     DATA_ARGS=(--eeg_protocol medformer_code_exact --eeg_normalization per_window_per_channel_standard_scaler_ddof0)
   else
-    DATA_ROOT="${WEARABLE_DATA_ROOT:-${NEUROSIGVIT_WEARABLE_ROOT:-$PROJECT_DIR/data/wearable}}"
+    DATA_ROOT="${WEARABLE_DATA_ROOT:-${NEUROSIGVIA_WEARABLE_ROOT:-$PROJECT_DIR/data/wearable}}"
   fi
   TRAIN_BATCH_SIZE="${BATCH_SIZES[$1]:-}"
   if [[ ! "$TRAIN_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
@@ -101,8 +101,8 @@ run_worker() {
         export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}" OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-8}"
         export MPLCONFIGDIR="$STATUS_ROOT/runtime/${dataset}_seed$seed/mpl"
         export HF_HOME="${HF_HOME:-$STATUS_ROOT/runtime/${dataset}_seed$seed/hf}"
-        export NEUROSIGVIT_EEG_ROOT="${EEG_DATA_DIR:-${NEUROSIGVIT_EEG_ROOT:-$PROJECT_DIR/data/eeg/processed}}"
-        export NEUROSIGVIT_WEARABLE_ROOT="${WEARABLE_DATA_ROOT:-${NEUROSIGVIT_WEARABLE_ROOT:-$PROJECT_DIR/data/wearable}}"
+        export NEUROSIGVIA_EEG_ROOT="${EEG_DATA_DIR:-${NEUROSIGVIA_EEG_ROOT:-$PROJECT_DIR/data/eeg/processed}}"
+        export NEUROSIGVIA_WEARABLE_ROOT="${WEARABLE_DATA_ROOT:-${NEUROSIGVIA_WEARABLE_ROOT:-$PROJECT_DIR/data/wearable}}"
         train_one "$dataset" "$seed" "$result" "$cache" "$@"
       ) >"$log" 2>&1 &
       child_pid=$!
@@ -200,7 +200,7 @@ run_experiments() {
     for seed in "${SEED_VALUES[@]}"; do
       write_job_status "$STATUS_ROOT/${dataset}_seed$seed.status" QUEUED "$dataset" "$seed" "$gpu" ''
       cache='-'
-      [[ "$METHOD" != NeuroSigViT ]] || cache="$CACHE_ROOT/seed$seed/$dataset"
+      [[ "$METHOD" != NeuroSigVIA ]] || cache="$CACHE_ROOT/seed$seed/$dataset"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$METHOD" "$dataset" "$seed" "$gpu" \
         "$STATUS_ROOT/${dataset}_seed$seed.status" "$LOG_ROOT/${dataset}_seed$seed.log" \
         "$RESULT_ROOT/seed$seed/$dataset" "$cache" >> "$STATUS_ROOT/manifest.tsv"

@@ -1,7 +1,7 @@
 # Wearable dataset processing protocols
 
 The two maintained clinical datasets are stored under `data/wearable/` and
-launched together through `scripts/NeuroSigViT.sh`.
+launched together through `scripts/NeuroSigVIA.sh`.
 
 | Key | Dataset | Input tensor | Split | Labels | Normalization |
 |---|---|---|---|---|---|
@@ -15,12 +15,12 @@ seeds 42, 43 and 44 by default. Edit `SEEDS` at the top of the method script
 to choose training seeds; this does not replace the fixed split seed.
 
 To run one wearable dataset on GPU 0, set `DATASETS="shimmer10"` or
-`DATASETS="pads11"` and `GPUS="0"` at the top of `scripts/NeuroSigViT.sh`,
+`DATASETS="pads11"` and `GPUS="0"` at the top of `scripts/NeuroSigVIA.sh`,
 then run from the repository root:
 
 ```bash
-conda activate neurosigvit
-bash scripts/NeuroSigViT.sh
+conda activate neurosigvia
+bash scripts/NeuroSigVIA.sh
 ```
 
 Choose an available GPU in the script. Training parameters are written in
@@ -29,7 +29,7 @@ If the compatible dataset wrapper is stored elsewhere, the optional
 `WEARABLE_DATA_ROOT` runtime setting can select its path. Results and cache
 paths are generated per run tag, training seed and dataset.
 
-The commands use the active `neurosigvit` environment described in `README.md`.
+The commands use the active `neurosigvia` environment described in `README.md`.
 
 Before creating an anonymous artifact, follow `ANONYMITY.md`. Local data links,
 results, caches, checkpoints, and Git metadata are runtime-only and must not be

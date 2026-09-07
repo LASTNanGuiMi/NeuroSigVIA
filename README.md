@@ -1,12 +1,10 @@
-# NeuroSigViT
+# NeuroSigVIA
 
-**NeuroSigViT** is a multimodal framework for EEG and wearable-sensor
-time-series classification. Its current TimeMosaic-style path learns the
+**NeuroSigVIA** is a multimodal framework for EEG and wearable-sensor
+time-series classification. Its adaptive granularity module learns the
 Activity Graph granularity before graph rendering, combines line-plot and
 Activity-Graph visual features with cross-attention, and aligns the resulting
 visual representation with frozen Mantis-8M temporal features.
-
-![NeuroSigViT method overview](assets/neurosigvit_method.jpg)
 
 The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 `Shimmer_10_session10_AFC`, and `PADS_11_task08_TouchIndex`.
@@ -28,29 +26,32 @@ full protocol.
 ## Repository layout
 
 ```text
-NeuroSigViT-main/
+NeuroSigVIA-main/
 |-- main.py
 |-- run_baseline.py
-|-- third_party/medformer/
-|-- run_selector_comparison.py
-|-- selector_host.py
-|-- selector_policies/
-|   |-- timemosaic.py
-|   `-- pathformer.py
 |-- experiment_common.py
+|-- third_party/medformer/
 |-- src/
-|   |-- neurosigvit.py
-|   |-- med_activity_graph.py
-|   |-- medformer_graph/
-|   |   `-- timemosaic_adaptive.py
+|   |-- README.md
+|   |-- neurosigvia.py
+|   |-- activity_graph.py
+|   |-- temporal_granularity.py
+|   |-- adaptive_activity_graph.py
+|   |-- granularity_selector.py
 |   |-- line_graph_cross_attention.py
-|   |-- timemosaic_patch_pipeline.py
-|   |-- timemosaic_graph_training.py
+|   |-- multimodal_fusion.py
+|   |-- adaptive_graph_training.py
 |   |-- patch_mindts.py
+|   |-- mlp_classifier.py
+|   |-- classifier.py
+|   |-- embedding.py
+|   |-- analysis.py
+|   |-- mutual_knn.py
+|   |-- arguments.py
 |   |-- datautils.py
+|   |-- utils.py
+|   |-- provenance.py
 |   `-- privacy.py
-|-- assets/
-|   `-- neurosigvit_method.jpg
 |-- data/
 |   `-- wearable/
 |       |-- Shimmer_10_session10_AFC/
@@ -58,7 +59,7 @@ NeuroSigViT-main/
 |-- data_loading/
 |   `-- split_reference_seed42.csv
 |-- scripts/
-|   |-- NeuroSigViT.sh
+|   |-- NeuroSigVIA.sh
 |   |-- Medformer.sh
 |   |-- Crossformer.sh
 |   |-- FEDformer.sh
@@ -66,12 +67,10 @@ NeuroSigViT-main/
 |   |-- PatchTST.sh
 |   |-- Transformer.sh
 |   `-- lib/experiments.sh
-|-- reproduction/
-|   |-- prepare_assets.py
-|   |-- evaluate_checkpoint.py
-|   `-- verify_checkpoint_grid.py
+|-- tests/
 |-- DATA_PROCESSING.md
 |-- ANONYMITY.md
+|-- SOURCE_NOTES.md
 |-- requirements.txt
 `-- LICENSE
 ```
@@ -80,29 +79,33 @@ The local dataset directories and links are runtime inputs. Datasets, model
 checkpoints, feature caches, logs, results, backups, and experiment snapshots
 remain on the server and are excluded from this source release.
 
-This repository contains both the current pre-render adaptive Activity Graph
-path and the archived post-encoding selector comparison. Machine-local dataset
-and checkpoint paths for the current method are written directly in each
-method script as command-line arguments.
+The current pre-render adaptive Activity Graph components are independent
+modules under `src/`; see [the source module map](src/README.md). Shared
+feature extraction, fusion, classification and data utilities remain available.
+Machine-local dataset and checkpoint paths for the current method are written
+directly in each method script as command-line arguments.
 
 ## Environment
 
 Create an environment from the repository root:
 
 ```bash
-conda create -n neurosigvit python=3.11 -y
-conda activate neurosigvit
+conda create -n neurosigvia python=3.11 -y
+conda activate neurosigvia
 python -m pip install -r requirements.txt
 ```
 
 The checked server environment uses Python 3.11, PyTorch 2.7.1, CUDA 12.6,
 `open_clip_torch` 2.32.0, `mantis-tsfm` 1.0.0, and `transformers` 4.33.3.
-Activate `neurosigvit` before running the scripts; the server's default
+Activate `neurosigvia` before running the scripts; the server's default
 non-interactive `python` is not the training environment.
+An existing compatible server environment can continue to be used without
+renaming or reinstalling it. In that case, activate that environment in place
+of the new environment name used in the examples below.
 
 ## Checkpoints
 
-The NeuroSigViT script uses these existing model entries relative to the repository:
+The NeuroSigVIA script uses these existing model entries relative to the repository:
 
 ```text
 ../models/CLIP-ViT-H-14-laion2B-s32B-b79K
@@ -114,11 +117,8 @@ On another machine, edit `--vit_1_name` and `--mantis_name` in the script.
 The corresponding public models are
 [`laion/CLIP-ViT-H-14-laion2B-s32B-b79K`](https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K)
 and [`paris-noah/Mantis-8M`](https://huggingface.co/paris-noah/Mantis-8M).
-Archived classifier checkpoints are optional for training. Use
-`reproduction/evaluate_checkpoint.py` only when verifying an archived model;
-the script creates a fresh feature cache from the selected data and encoders.
 
-The current path writes `timemosaic_graph_checkpoint.pt`. It contains the
+The current path writes `neurosigvia_checkpoint.pt`. It contains the
 adaptive region gate, line-query/graph-key-value cross-attention, temporal
 `concat_attn` fusion module, and classifier head. It intentionally does not
 contain the frozen OpenCLIP or Mantis weights, so those two encoders must be
@@ -154,22 +154,22 @@ are fitted on the retained training samples only and then reused for validation
 and test data.
 
 To run only this endpoint, set `DATASETS="pads11"` and `GPUS="0"` at the top
-of `scripts/NeuroSigViT.sh`, then run:
+of `scripts/NeuroSigVIA.sh`, then run:
 
 ```bash
-conda activate neurosigvit
-bash scripts/NeuroSigViT.sh
+conda activate neurosigvia
+bash scripts/NeuroSigVIA.sh
 ```
 
 ## Running experiments
 
-### Current pre-render TimeMosaic path
+### Adaptive granularity path
 
 For every 64-sample outer window, the current implementation follows this
 sequence:
 
 1. Split every channel into four 16-sample regions and use a hard
-   straight-through TimeMosaic-style gate to choose granularity 4, 8, or 16 for
+   straight-through categorical gate to choose granularity 4, 8, or 16 for
    each region.
 2. Apply the selected maps before cross-channel propagation and render exactly
    one adaptive Activity Graph. Render the line plot from the same window in
@@ -186,18 +186,14 @@ sequence:
    repository's existing `concat_attn` interaction; the InfoNCE branch remains
    a training objective.
 
-Only the region classifier and hard Gumbel selection pattern are adapted from
-TimeMosaic's
-[`models/TimeMosaic.py::AdaptivePatchEmbedding`](https://github.com/BenchCouncil/TimeMosaic/blob/214423b7f0b4653d04620814380a9301580285cc/models/TimeMosaic.py#L59-L144).
-Activity-map construction, channel propagation, rendering, cross-attention,
-InfoNCE, and classification are NeuroSigViT components; this path does not
-embed the complete TimeMosaic forecasting model.
+See [source and adaptation credits](SOURCE_NOTES.md) for the gate's upstream
+reference and the boundaries of its adaptation.
 
 Each method has one script with a direct Python classification command, following Medformer's method-script layout. Each entry runs all five datasets for training seeds 42, 43 and 44:
 
 ```bash
-conda activate neurosigvit
-bash scripts/NeuroSigViT.sh
+conda activate neurosigvia
+bash scripts/NeuroSigVIA.sh
 ```
 
 The six comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`, `Autoformer.sh`, `PatchTST.sh`, and `Transformer.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. Model sources are copied unchanged from Medformer into `third_party/medformer/`, including their MIT license, commit and per-file hashes. Install the additional import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
@@ -205,9 +201,9 @@ The six comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`,
 Defaults use GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
 ```bash
-tmux new-session -s neurosigvit
-conda activate neurosigvit
-bash scripts/NeuroSigViT.sh
+tmux new-session -s neurosigvia
+conda activate neurosigvia
+bash scripts/NeuroSigVIA.sh
 ```
 
 Set datasets, training seeds, GPU assignments and per-dataset batch sizes in
@@ -221,7 +217,7 @@ edit those values in the script before launching.
 To inspect the full commands without launching:
 
 ```bash
-DRY_RUN=1 bash scripts/NeuroSigViT.sh
+DRY_RUN=1 bash scripts/NeuroSigVIA.sh
 ```
 
 Normal launches need no parameter prefixes or appended arguments. Optional
@@ -231,7 +227,7 @@ run (`RUN_TAG`). When a selected GPU is occupied, the default exits before
 launching; enabling `WAIT_FOR_GPUS` keeps each dataset queued until its GPU is
 free, with status `WAITING_FOR_GPU`.
 
-Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, edit `DATASETS` and `SEEDS` in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
+Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, edit `DATASETS` and `SEEDS` in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
 The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. Defaults are 100 epochs with existing early stopping (warmup 10, patience 12) and batch sizes 8/8/8/1/4. Both trainers select on validation subject Macro-F1. Baselines use AdamW, balanced cross entropy, mean subject probabilities and one final test evaluation after restoring the best checkpoint. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
@@ -246,73 +242,38 @@ granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
 Mantis patch alignment, and final visual-Mantis `concat_attn` fusion.
 
 This path is selected only by
-`--modal_interaction patch_timemosaic_graph`. Do not add
+`--modal_interaction adaptive_granularity`. Do not add
 `--med_activity_adaptive_granularity`: that flag activates the historical
 post-encoding graph bank and is rejected for the current path.
 
-Historical Activity Graph, Patch-MindTS, GPU-waiting, batch-launching, and
-Router-v4 analysis scripts have been removed from the current `scripts/`
-directory. Their committed versions remain recoverable from Git; historical
-worktrees retain their own copies.
+The script sets `--granularity_gate_temperature`,
+`--granularity_balance_weight` and `--granularity_graph_token_grid` directly.
+Optional gate loading and freezing use `--granularity_gate_checkpoint` and
+`--granularity_freeze_gate`; add these options to the Python command inside
+`scripts/NeuroSigVIA.sh` when needed.
 
-### Archived TimeMosaic selector-only configuration (post-encoding)
+### Source modules
 
-The archived TimeMosaic experiments used `selector_only_v1_shared_v5_loss`.
-This is a controlled adaptation of the hard Gumbel top-1 selector from
-[TimeMosaic](https://github.com/BenchCouncil/TimeMosaic/tree/214423b7f0b4653d04620814380a9301580285cc),
-not a reproduction of the complete forecasting model. Only the adaptive
-granularity selector changes; Activity Graph construction, frozen CLIP and
-Mantis encoders, Patch-MindTS fusion, classifier, loss, and data splits remain
-shared.
-
-In that archived path, all candidate Activity Graphs are rendered and encoded
-before a selector chooses among their features. It is retained for reproducing
-the earlier five-dataset comparison and must not be described as the current
-pre-render method. Its checkpoints and reported results do not validate the
-new `patch_timemosaic_graph` architecture; the current method must be retrained
-and evaluated separately.
-
-| Setting | Archived value |
-| --- | --- |
-| Datasets | ADFTD, TDBRAIN, APAVA, Shimmer10, PADS11 |
-| Seeds | 42, 43, 44 |
-| Outer window / stride | 64 / 64 |
-| Activity Graph candidates | `(4,)`, `(8,)`, `(16,)` |
-| TimeMosaic selector | two-layer MLP, hard Gumbel top-1, temperature 0.5 |
-| Fusion width / heads | 128 / 2 |
-| Classifier | hidden width 128, 2 layers, dropout 0.1 |
-| Optimizer | learning rate `3e-4`, weight decay `1e-3`, 100 epochs |
-| Early stopping | `raw_primary`, 10-epoch warmup, patience 12, minimum delta 0.002 |
-| LR scheduler | ReduceLROnPlateau, patience 4, factor 0.5, minimum LR `1e-6` |
-| Batch size | ADFTD/TDBRAIN/APAVA 8; Shimmer10 1; PADS11 4 |
-
-The archived entry is `run_selector_comparison.py`; its asset configuration
-and exact runtime values are defined in that module and `experiment_common.py`.
-`selector_host.py` installs the selected routing policy into the unchanged
-`PatchMindTSFusionModule`; `selector_policies/timemosaic.py` contains the
-TimeMosaic-style selector.
-
-### Additional code paths
-
-The source also includes MedActivity image transforms, adaptive granularity
-selection, and Patch-MindTS / Router development paths.
+Current method components are organized by function. The Medformer baseline
+and the other five baseline implementations are under `third_party/medformer/`.
 
 | Entry | Purpose |
 | --- | --- |
-| `src/medformer_graph/timemosaic_adaptive.py` | Pre-render 4/8/16 region gate and differentiable adaptive Activity Graph renderer |
+| `src/temporal_granularity.py` | Pre-render 4/8/16 region gate and gate checkpoint provenance |
+| `src/adaptive_activity_graph.py` | Differentiable adaptive Activity Graph renderer |
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
-| `src/timemosaic_patch_pipeline.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
-| `src/timemosaic_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/NeuroSigViT.sh` and six baseline method scripts | Five datasets and three seeds per method |
-| `src/med_activity_graph.py`, `src/medformer_graph/` | MedActivity image transforms and granularity selection |
-| `src/patch_mindts.py` | Patch-MindTS and Router implementation |
-| `selector_policies/timemosaic.py` | TimeMosaic-style adaptive granularity selector |
-| `selector_host.py` | Controlled selector replacement on the shared Patch-MindTS host |
-| `run_selector_comparison.py` | Fixed five-dataset selector-only experiment configuration |
+| `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
+| `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
+| `scripts/NeuroSigVIA.sh` and six baseline method scripts | Five datasets and three seeds per method |
+| `src/activity_graph.py` | Shared graph-rendering primitives, fixed MedActivity transforms and candidate graph banks |
+| `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |
+| `src/patch_mindts.py`, `src/mlp_classifier.py` | Shared window, encoder and fusion utilities, plus retained Patch-MindTS / Router paths |
 
-See [MedActivity implementation notes](docs/MEDACTIVITY.md) for the image and
-feature layouts of the historical transforms. The current scripts contain
-their dataset, checkpoint, cache, and output paths directly.
+The former selector-comparison and archived-checkpoint reproduction entries
+have been removed from the current checkout. Their committed versions remain
+recoverable from Git; historical worktrees retain their own copies. Shared
+modules still imported by the maintained entry points are retained. See
+[the source module map](src/README.md) for their boundaries.
 
 Run scripts from the repository root. Real experiments require the corresponding
 local datasets and frozen encoders; this source update does not report new
@@ -321,8 +282,8 @@ benchmark results or establish equivalence between development and snapshot runs
 ## Verification
 
 ```bash
-python -m compileall -q main.py src data_loading scripts selector_policies \
-  reproduction selector_host.py experiment_common.py run_selector_comparison.py
+python -m compileall -q main.py run_baseline.py experiment_common.py src \
+  data_loading tests third_party/medformer
 for script in scripts/*.sh; do bash -n "$script"; done
 ```
 

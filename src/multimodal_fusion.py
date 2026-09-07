@@ -1,12 +1,12 @@
 """Patch-level fusion for adaptively generated Activity Graphs.
 
-This module is the feature-fusion half of the TimeMosaic-style pipeline.  Raw
+This module is the feature-fusion half of the adaptive-granularity pipeline.  Raw
 signals are routed and rendered by
-``TimeMosaicAdaptiveActivityGraphRenderer`` before they reach this module.
+``AdaptiveActivityGraphRenderer`` before they reach this module.
 The resulting Activity Graph keeps a small spatial token grid so a pooled
 line-plot token can act as a genuine query over multiple graph keys/values.
 
-The final temporal/visual classifier reuses NeuroSigViT's existing
+The final temporal/visual classifier reuses NeuroSigVIA's existing
 ``concat_attn`` interaction: project the visual and temporal branches, apply
 self-attention over the two branch tokens, flatten the attended tokens, and
 pass that representation to the classifier MLP.  The Line-Q/Graph-KV
@@ -23,9 +23,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.line_graph_cross_attention import LineGraphCrossAttention
-from src.medformer_graph.timemosaic_adaptive import (
+from src.temporal_granularity import (
     ADAPTATION_VERSION,
-    TimeMosaicRegionGate,
+    AdaptiveGranularityGate,
 )
 from src.mlp_classifier import FusionModule
 from src.patch_mindts import (
@@ -38,7 +38,7 @@ from src.patch_mindts import (
 
 OPENCLIP_SPATIAL_GRID_SIZE = 4
 OPENCLIP_SPATIAL_TOKEN_COUNT = OPENCLIP_SPATIAL_GRID_SIZE**2
-TIMEMOSAIC_PATCH_PIPELINE_VERSION = "timemosaic_patch_pipeline_concat_attn_v2"
+MULTIMODAL_FUSION_VERSION = "multimodal_fusion_concat_attn_v2"
 
 
 def compress_openclip_spatial_tokens(
@@ -116,7 +116,7 @@ def compress_openclip_spatial_tokens(
     )
 
 
-class TimeMosaicPatchFusionModule(nn.Module):
+class AdaptiveGranularityFusionModule(nn.Module):
     """Fuse one adaptive Activity Graph with line and Mantis features.
 
     The expected inputs are already encoded patch-level features:
@@ -257,9 +257,9 @@ class TimeMosaicPatchFusionModule(nn.Module):
         }
         self.configuration: dict[str, Any] = {
             **self.constructor_configuration,
-            "architecture": TIMEMOSAIC_PATCH_PIPELINE_VERSION,
+            "architecture": MULTIMODAL_FUSION_VERSION,
             "activity_graph_generation": ADAPTATION_VERSION,
-            "activity_graph_provenance": TimeMosaicRegionGate.provenance(),
+            "activity_graph_provenance": AdaptiveGranularityGate.provenance(),
             "visual_fusion": (
                 "pooled_line_query_activity_graph_spatial_key_value_"
                 "cross_attention_v1"
@@ -297,7 +297,7 @@ class TimeMosaicPatchFusionModule(nn.Module):
     def from_config(
         cls,
         config: dict[str, Any],
-    ) -> "TimeMosaicPatchFusionModule":
+    ) -> "AdaptiveGranularityFusionModule":
         """Reconstruct this module from :meth:`get_config` output."""
 
         return cls(**dict(config))
@@ -491,7 +491,7 @@ class TimeMosaicPatchFusionModule(nn.Module):
 __all__ = [
     "OPENCLIP_SPATIAL_GRID_SIZE",
     "OPENCLIP_SPATIAL_TOKEN_COUNT",
-    "TIMEMOSAIC_PATCH_PIPELINE_VERSION",
-    "TimeMosaicPatchFusionModule",
+    "MULTIMODAL_FUSION_VERSION",
+    "AdaptiveGranularityFusionModule",
     "compress_openclip_spatial_tokens",
 ]

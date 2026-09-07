@@ -1,4 +1,4 @@
-"""Patch-level cross-view fusion for NeuroSigViT.
+"""Patch-level cross-view fusion for NeuroSigVIA.
 
 This module implements the time-patch path without changing the legacy
 sample-level MLP/ATGS contracts.  Every branch consumes the same temporal
@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from tqdm import tqdm
 
 from src.classifier import compute_metrics_from_predictions
-from src.neurosigvit import preprocess_stacked_multichannel_lineplot
+from src.neurosigvia import preprocess_stacked_multichannel_lineplot
 from src.utils import get_split, resize_mantis_input, set_random_seed
 
 
@@ -215,8 +215,8 @@ class ChannelAttentionPool(nn.Module):
 class PatchGranularityCrossAttention(nn.Module):
     """Line-Q/Activity-Graph-KV routing with versioned policies.
 
-    TimeMosaic motivates making an independent decision for every temporal
-    window, while Pathformer motivates keeping multiple scale experts.  The
+    Each temporal window makes an independent granularity decision over
+    multiple scale experts. Source inspirations are recorded in SOURCE_NOTES.md. The
     actual routing rule here is task-specific.  Legacy v4 uses bounded RBF
     distances and learned hierarchical shrinkage.  V4.1 retains the same
     dataset/sample/patch hierarchy but restores a v3-like dot-product path,
@@ -228,7 +228,7 @@ class PatchGranularityCrossAttention(nn.Module):
     V5 keeps the task-specific premise explicit: every route logit is produced
     by an interaction between a line-plot query and an Activity-Graph key.  It
     blends patch-local Q/K scores with sample-global Q/K scores, then applies a
-    Pathformer-style Top-K mask and re-normalizes only the selected experts.
+    Top-K mask and re-normalizes only the selected experts.
     The shared relation scorer and zero-initialized diagonal key adapter avoid
     three unrelated scale-specific classifiers while still allowing the
     middle scale to depart from a strict linear midpoint.  No raw-series gate,
@@ -726,7 +726,7 @@ class PatchGranularityCrossAttention(nn.Module):
         )
 
         # The clean pre-TopK probabilities provide the differentiable load
-        # proxy.  Optional Pathformer-like noise affects expert selection only
+        # proxy.  Optional routing noise affects expert selection only
         # during training and is disabled by default.
         pre_topk_weights = torch.softmax(
             clean_scores / self.temperature,
@@ -1310,8 +1310,8 @@ def masked_v5_router_regularization_terms(
 ):
     """Return V5 soft-budget and differentiable load-balancing terms.
 
-    TimeMosaic motivates controlling the aggregate granularity budget, while
-    Pathformer motivates balanced expert importance/load.  To prevent samples
+    Regularization controls the aggregate granularity budget and balances
+    expert importance/load. To prevent samples
     with more valid windows from dominating either term, weights are first
     averaged over each sample's valid-time mass and only then averaged equally
     over samples.  ``valid_fraction`` optionally downweights a partial tail
@@ -1798,7 +1798,7 @@ class PatchMindTSFusionModule(nn.Module):
                     else "dataset_prior_sample_global_query_patch_local_query_v4"
                 )
             ),
-            "granularity_expert_pattern": "parallel_multiscale_pathformer_inspired",
+            "granularity_expert_pattern": "parallel_multiscale_experts",
             "granularity_regularization_policy": (
                 "sample_equal_post_topk_soft_budget_pre_topk_load_cv2_v5"
                 if v5_enabled

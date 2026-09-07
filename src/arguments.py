@@ -1,5 +1,8 @@
 import argparse
 import math
+import sys
+
+from src.compatibility import normalize_cli_arguments
 
 VIT_NAME = [
     "laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
@@ -83,7 +86,7 @@ def parse_med_activity_granularity_bank(value):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="NeuroSigViT.")
+    parser = argparse.ArgumentParser(description="NeuroSigVIA.")
 
     parser.add_argument(
         "--vit_1_name",
@@ -231,7 +234,7 @@ def parse_args():
         help=(
             "Patch-level graph router: legacy bounded-RBF v4, confidence-gated "
             "scale-specific v4.1, project-specific line-Q/graph-KV v5 with "
-            "TimeMosaic-inspired patch-local decisions and Pathformer-inspired "
+            "adaptive-granularity patch-local decisions and multi-expert "
             "sparse top-k experts, or a formal fixed-uniform baseline"
         ),
     )
@@ -381,7 +384,7 @@ def parse_args():
         default=2,
         help=(
             "Number of graph-scale experts retained by adaptive_v5. The sparse "
-            "top-k expert pattern is Pathformer-inspired; the scores remain the "
+            "top-k expert pattern is multi-expert; the scores remain the "
             "project's line-Q/graph-KV relation scores"
         ),
     )
@@ -391,7 +394,7 @@ def parse_args():
         default=0.0,
         help=(
             "Optional standard deviation of training-only v5 router-logit noise. "
-            "Pathformer-style noisy gating is opt-in; the default 0 keeps train "
+            "multi-expert noisy gating is opt-in; the default 0 keeps train "
             "and inference routing identical"
         ),
     )
@@ -401,7 +404,7 @@ def parse_args():
         default=0.5,
         help=(
             "Weight of patch-local line-Q/graph-KV relation evidence in the v5 "
-            "route; the patch-local decision scope is TimeMosaic-inspired"
+            "route; the patch-local decision scope is adaptive-granularity"
         ),
     )
     parser.add_argument(
@@ -443,7 +446,7 @@ def parse_args():
         type=float,
         default=0.005,
         help=(
-            "Weight of the Pathformer-inspired adaptive_v5 CV-squared load "
+            "Weight of the multi-expert adaptive_v5 CV-squared load "
             "penalty on the sample-equal pre-top-k clean-softmax marginal"
         ),
     )
@@ -622,13 +625,13 @@ def parse_args():
             "cross_attn_gate",
             "masked_pretrain",
             "patch_mindts",
-            "patch_timemosaic_graph",
+            "adaptive_granularity",
         ],
         default="concat",
         help=(
             "How to fuse branch embeddings in the MLP path. "
             "patch_mindts retains the historical post-encoding selector; "
-            "patch_timemosaic_graph selects 4/8/16 while constructing one "
+            "adaptive_granularity selects 4/8/16 while constructing one "
             "Activity Graph, applies Line-Q/Graph-KV cross-attention, and "
             "uses concat_attn for final visual-Mantis fusion."
         ),
@@ -683,27 +686,27 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--timemosaic_gate_temperature",
+        "--granularity_gate_temperature",
         type=float,
         default=0.5,
         help=(
-            "Training temperature of the hard straight-through TimeMosaic-style "
-            "4/8/16 region gate used by patch_timemosaic_graph"
+            "Training temperature of the hard straight-through adaptive-granularity "
+            "4/8/16 region gate used by adaptive_granularity"
         ),
     )
 
     parser.add_argument(
-        "--timemosaic_selector_balance_weight",
+        "--granularity_balance_weight",
         type=float,
         default=0.001,
         help=(
             "Weight of the train-split gate-usage balance term in "
-            "patch_timemosaic_graph"
+            "adaptive_granularity"
         ),
     )
 
     parser.add_argument(
-        "--timemosaic_graph_token_grid",
+        "--granularity_graph_token_grid",
         type=int,
         default=4,
         help=(
@@ -713,19 +716,19 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--timemosaic_gate_checkpoint",
+        "--granularity_gate_checkpoint",
         type=str,
         default=None,
         help=(
-            "Optional trusted checkpoint containing TimeMosaic region_cls "
+            "Optional trusted checkpoint containing adaptive granularity region_cls "
             "weights. Omit to train the gate jointly."
         ),
     )
 
     parser.add_argument(
-        "--timemosaic_freeze_gate",
+        "--granularity_freeze_gate",
         action="store_true",
-        help="Freeze a loaded TimeMosaic region gate during classifier training",
+        help="Freeze a loaded adaptive granularity region gate during classifier training",
     )
 
     parser.add_argument(
@@ -982,7 +985,7 @@ def parse_args():
         help="Number of activity line plot sample images to save per dataset",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(normalize_cli_arguments(sys.argv[1:]))
     if args.med_activity_granularity_bank is None:
         if args.modal_interaction == "patch_mindts":
             args.med_activity_granularity_bank = ((4,), (8,), (16,))
@@ -1215,25 +1218,25 @@ def parse_args():
     if args.visual_encode_batch_size <= 0:
         parser.error("--visual_encode_batch_size must be positive")
     if (
-        not math.isfinite(args.timemosaic_gate_temperature)
-        or args.timemosaic_gate_temperature <= 0.0
+        not math.isfinite(args.granularity_gate_temperature)
+        or args.granularity_gate_temperature <= 0.0
     ):
-        parser.error("--timemosaic_gate_temperature must be positive and finite")
+        parser.error("--granularity_gate_temperature must be positive and finite")
     if (
-        not math.isfinite(args.timemosaic_selector_balance_weight)
-        or args.timemosaic_selector_balance_weight < 0.0
+        not math.isfinite(args.granularity_balance_weight)
+        or args.granularity_balance_weight < 0.0
     ):
         parser.error(
-            "--timemosaic_selector_balance_weight must be finite and non-negative"
+            "--granularity_balance_weight must be finite and non-negative"
         )
-    if args.timemosaic_graph_token_grid < 2:
+    if args.granularity_graph_token_grid < 2:
         parser.error(
-            "--timemosaic_graph_token_grid must be at least 2 so cross-attention "
+            "--granularity_graph_token_grid must be at least 2 so cross-attention "
             "has more than one graph K/V token"
         )
-    if args.timemosaic_freeze_gate and not args.timemosaic_gate_checkpoint:
+    if args.granularity_freeze_gate and not args.granularity_gate_checkpoint:
         parser.error(
-            "--timemosaic_freeze_gate requires --timemosaic_gate_checkpoint"
+            "--granularity_freeze_gate requires --granularity_gate_checkpoint"
         )
     if args.med_activity_adaptive_granularity:
         if args.image_mode != "med_activity_graph":
@@ -1343,54 +1346,54 @@ def parse_args():
             parser.error(
                 "--fusion_dim must be divisible by --fusion_heads in patch_mindts"
             )
-    if args.modal_interaction == "patch_timemosaic_graph":
+    if args.modal_interaction == "adaptive_granularity":
         if args.classifier_type != "mlp":
             parser.error(
-                "--modal_interaction patch_timemosaic_graph requires "
+                "--modal_interaction adaptive_granularity requires "
                 "--classifier_type mlp"
             )
         if args.image_mode != "med_activity_graph":
             parser.error(
-                "--modal_interaction patch_timemosaic_graph requires "
+                "--modal_interaction adaptive_granularity requires "
                 "--image_mode med_activity_graph"
             )
         if args.aggregation not in {"mean", "cls_token"}:
             parser.error(
-                "patch_timemosaic_graph requires --aggregation mean or cls_token"
+                "adaptive_granularity requires --aggregation mean or cls_token"
             )
         if args.med_activity_adaptive_granularity:
             parser.error(
-                "patch_timemosaic_graph performs its own pre-render selection; "
+                "adaptive_granularity performs its own pre-render selection; "
                 "do not enable the historical --med_activity_adaptive_granularity bank"
             )
         if not args.vit_1_name:
             parser.error(
-                "--modal_interaction patch_timemosaic_graph requires --vit_1_name"
+                "--modal_interaction adaptive_granularity requires --vit_1_name"
             )
         if args.vit_1_layer is None or (
             args.vit_1_layer != -1 and args.vit_1_layer <= 0
         ):
             parser.error(
-                "patch_timemosaic_graph requires --vit_1_layer to be a positive "
+                "adaptive_granularity requires --vit_1_layer to be a positive "
                 "integer or -1"
             )
         if args.vit_2_name:
             parser.error(
-                "patch_timemosaic_graph uses one shared visual encoder; "
+                "adaptive_granularity uses one shared visual encoder; "
                 "--vit_2_name is not supported"
             )
         if not args.mantis:
-            parser.error("patch_timemosaic_graph requires --mantis")
+            parser.error("adaptive_granularity requires --mantis")
         if args.moment:
-            parser.error("patch_timemosaic_graph does not use MOMENT")
+            parser.error("adaptive_granularity does not use MOMENT")
         if args.outer_patch_size != 64:
             parser.error(
-                "patch_timemosaic_graph currently defines each outer window as "
+                "adaptive_granularity currently defines each outer window as "
                 "exactly 64 samples"
             )
-        if args.timemosaic_graph_token_grid != 4:
+        if args.granularity_graph_token_grid != 4:
             parser.error(
-                "patch_timemosaic_graph currently fixes the retained graph token "
+                "adaptive_granularity currently fixes the retained graph token "
                 "grid at 4x4 (16 K/V tokens)"
             )
         if args.outer_patch_stride > args.outer_patch_size:
@@ -1401,12 +1404,12 @@ def parse_args():
         if args.fusion_dim <= 0 or args.fusion_heads <= 0:
             parser.error(
                 "--fusion_dim and --fusion_heads must be positive in "
-                "patch_timemosaic_graph"
+                "adaptive_granularity"
             )
         if args.fusion_dim % args.fusion_heads != 0:
             parser.error(
                 "--fusion_dim must be divisible by --fusion_heads in "
-                "patch_timemosaic_graph"
+                "adaptive_granularity"
             )
     if args.falltl_target_length <= 0:
         parser.error("--falltl_target_length must be positive")

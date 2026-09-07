@@ -3,9 +3,9 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 source scripts/lib/experiments.sh
 
-# Run: bash scripts/NeuroSigViT.sh
+# Run: bash scripts/NeuroSigVIA.sh
 # Edit experiment settings here; training hyperparameters are below.
-model_name=NeuroSigViT
+model_name=NeuroSigVIA
 DATASETS="adftd tdbrain apava shimmer10 pads11"
 SEEDS="42 43 44"
 GPUS="0 1 2 3 4"
@@ -23,19 +23,19 @@ train_one() {
     --dataset_names "$DATASET_NAME" \
     --data_dir "$DATA_ROOT" \
     "${DATA_ARGS[@]}" \
-    --vit_1_name "${MODEL_DIR:-${NEUROSIGVIT_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
+    --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
     --vit_1_layer 14 \
     --aggregation mean \
     --image_mode med_activity_graph \
     --med_activity_channel_mix 0.35 \
     --med_activity_granularity_hidden_dim 64 \
-    --mantis --mantis_name "${MANTIS_DIR:-${NEUROSIGVIT_MANTIS_PATH:-../models/Mantis-8M}}" \
+    --mantis --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
     --classifier_type mlp \
-    --modal_interaction patch_timemosaic_graph \
+    --modal_interaction adaptive_granularity \
     --outer_patch_size 64 --outer_patch_stride 64 \
-    --timemosaic_gate_temperature 0.5 \
-    --timemosaic_selector_balance_weight 0.001 \
-    --timemosaic_graph_token_grid 4 \
+    --granularity_gate_temperature 0.5 \
+    --granularity_balance_weight 0.001 \
+    --granularity_graph_token_grid 4 \
     --patch_alignment_dim 256 --patch_alignment_temperature 0.1 \
     --patch_alignment_weight 0.1 \
     --patch_checkpoint_metric subject_macro_f1 \

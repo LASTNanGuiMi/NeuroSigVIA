@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Subset, TensorDataset
 from tqdm import tqdm
 
 from src.classifier import compute_metrics_from_predictions
-from src.medformer_graph import AdaptiveTemporalGranularitySelector
+from src.granularity_selector import AdaptiveTemporalGranularitySelector
 from src.utils import (
     get_split,
     resize_mantis_input,
@@ -473,7 +473,7 @@ def _balanced_class_weights(label_indices, num_classes, device):
     return torch.as_tensor(weights, dtype=torch.float32, device=device)
 
 
-def _forward_neurosigvit_batch(model, batch, channels, device):
+def _forward_neurosigvia_batch(model, batch, channels, device):
     granularity_count = int(getattr(model, "feature_granularity_count", 1))
     if granularity_count > 1:
         if model.image_mode != "med_activity_graph":
@@ -529,7 +529,7 @@ def _forward_mantis_batch(model, batch, channels, device):
         outputs = model(batch_dim)
         batch_embeds_dim.append(outputs)
 
-    # Mantis emits one 512-D vector per channel.  NeuroSigViT pools those
+    # Mantis emits one 512-D vector per channel.  NeuroSigVIA pools those
     # frozen channel representations into one sample-level temporal token.
     outputs = torch.stack(batch_embeds_dim, dim=1).mean(dim=1)
 
@@ -549,11 +549,11 @@ def forward_feature_batch(
 
     if vision_model_1 is not None:
         features.append(
-            _forward_neurosigvit_batch(vision_model_1, batch, channels, device)
+            _forward_neurosigvia_batch(vision_model_1, batch, channels, device)
         )
     if vision_model_2 is not None:
         features.append(
-            _forward_neurosigvit_batch(vision_model_2, batch, channels, device)
+            _forward_neurosigvia_batch(vision_model_2, batch, channels, device)
         )
     if mantis_model is not None:
         features.append(_forward_mantis_batch(mantis_model, batch, channels, device))

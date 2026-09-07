@@ -1,20 +1,10 @@
-"""Medformer-inspired graph rendering for multichannel time series.
+"""Deterministic multichannel Activity Graph rendering for NeuroSigVIA.
 
-The canonical renderer is :class:`MedformerGraphRenderer`.  Historical class
-names remain available as aliases.  The transform is deterministic and
-contains no learned parameters.  It transfers three ideas from Medformer into
-image generation:
-
-1. non-overlapping patches at one or three temporal scales;
-2. correlation-weighted cross-channel activity propagation at each scale;
-3. optional router-style information exchange between three legacy scales.
-
-The resulting fine, medium, and coarse activity maps are encoded as the RGB
-planes consumed by the existing vision backbone.  ``TemporalGranularityGraphBank``
-adds a bank of such RGB renderers so a downstream, trainable selector can pick
-the most useful temporal-granularity regime per temporal window.  These are image
-transforms inspired by Medformer, not implementations of the Medformer
-classifier.
+ActivityGraphRenderer combines temporal patch activity, correlation-weighted
+channel propagation and optional cross-scale exchange. TemporalGranularityGraphBank
+collects RGB renderings for the shared feature-level selection path. The current
+adaptive graph module also uses the row-order and row-weight primitives here.
+Source inspirations and adaptation boundaries are documented in SOURCE_NOTES.md.
 """
 
 from __future__ import annotations
@@ -116,7 +106,7 @@ def _inverse_occurrence_row_weights(
     return weights / weights.mean()
 
 
-class MedformerGraphRenderer(nn.Module):
+class ActivityGraphRenderer(nn.Module):
     """Create an RGB multi-scale activity graph from ``(B, channels, time)``.
 
     In legacy three-scale mode, RGB has a fixed semantic meaning: red is
@@ -140,7 +130,7 @@ class MedformerGraphRenderer(nn.Module):
             patch_lengths = tuple(int(length) for length in patch_lengths)
         if len(patch_lengths) not in {1, 3}:
             raise ValueError(
-                "MedformerGraphRenderer requires either one single-scale "
+                "ActivityGraphRenderer requires either one single-scale "
                 "expert length or exactly three legacy RGB encoding lengths; "
                 f"got {patch_lengths}."
             )
@@ -345,7 +335,7 @@ class TemporalGranularityGraphBank(nn.Module):
     """Render a fixed bank of temporal-granularity graph experts.
 
     The output layout is ``(batch, regimes, RGB, height, width)``.  Each regime
-    is an ordinary :class:`MedformerGraphRenderer`; keeping the existing renderer
+    is an ordinary :class:`ActivityGraphRenderer`; keeping the existing renderer
     intact makes a bank entry that uses ``(2, 4, 8)`` exactly equal to the
     legacy graph.  A one-element entry such as ``(8,)`` is a true single-scale
     expert rendered as neutral RGB.  The bank intentionally has no trainable
@@ -375,10 +365,10 @@ class TemporalGranularityGraphBank(nn.Module):
                 f"{patch_length_bank}."
             )
 
-        # MedformerGraphRenderer performs per-regime length/range validation.
+        # ActivityGraphRenderer performs per-regime length/range validation.
         self.graphs = nn.ModuleList(
             [
-                MedformerGraphRenderer(
+                ActivityGraphRenderer(
                     patch_lengths=patch_lengths,
                     img_size=img_size,
                     channel_mix=channel_mix,
@@ -396,14 +386,14 @@ class TemporalGranularityGraphBank(nn.Module):
 
 
 # Backward-compatible public names.
-MedActitivy_graph = MedformerGraphRenderer
-MedActivityGraph = MedformerGraphRenderer
+MedActitivy_graph = ActivityGraphRenderer
+MedActivityGraph = ActivityGraphRenderer
 MedActivityGranularityBank = TemporalGranularityGraphBank
 MultiGranularityGraphBank = TemporalGranularityGraphBank
 
 
 __all__ = [
-    "MedformerGraphRenderer",
+    "ActivityGraphRenderer",
     "TemporalGranularityGraphBank",
     "MultiGranularityGraphBank",
     "MedActivityGraph",

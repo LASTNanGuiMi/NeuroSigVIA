@@ -10,7 +10,7 @@ def embed(model, dataloader, model_type, channels, device):
 
     for (batch,) in tqdm(dataloader):
 
-        if model_type == "neurosigvit" and getattr(model, "image_mode", None) in {
+        if model_type == "neurosigvia" and getattr(model, "image_mode", None) in {
             "multichannel_line_plot",
             "activity_graph",
             "med_activity_graph",
@@ -31,7 +31,7 @@ def embed(model, dataloader, model_type, channels, device):
 
             with torch.no_grad():
 
-                if model_type == "neurosigvit":
+                if model_type == "neurosigvia":
                     batch_dim = batch_dim.to(device)
                     outputs = model(batch_dim).cpu().numpy()
 

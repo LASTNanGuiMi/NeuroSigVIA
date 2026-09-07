@@ -18,8 +18,8 @@ from transformers import (
     ViTMAEForPreTraining,
 )
 
-from src.medformer_graph import (
-    MedformerGraphRenderer,
+from src.activity_graph import (
+    ActivityGraphRenderer,
     TemporalGranularityGraphBank,
 )
 
@@ -566,7 +566,7 @@ def get_processor_vit(model_name):
     return processor, vit
 
 
-def get_neurosigvit(
+def get_neurosigvia(
     model_name,
     model_layer,
     aggregation,
@@ -583,15 +583,15 @@ def get_neurosigvit(
     processor, vit = get_processor_vit(model_name)
 
     if hasattr(vit, "transformer") and hasattr(vit.transformer, "resblocks"):
-        NeuroSigViTClass = NeuroSigViT_OpenCLIP
+        NeuroSigVIAClass = NeuroSigVIA_OpenCLIP
     elif hasattr(vit, "encoder") and (
         hasattr(vit.encoder, "layers") or hasattr(vit.encoder, "layer")
     ):
-        NeuroSigViTClass = NeuroSigViT_HF
+        NeuroSigVIAClass = NeuroSigVIA_HF
     else:
         raise ValueError("Unsupported model structure.")
 
-    neurosigvit = NeuroSigViTClass(
+    neurosigvia = NeuroSigVIAClass(
         processor=processor,
         vit=vit,
         layer_idx=model_layer,
@@ -600,7 +600,7 @@ def get_neurosigvit(
         stride=stride,
         image_mode=image_mode,
     )
-    neurosigvit.med_activity_graph = MedformerGraphRenderer(
+    neurosigvia.med_activity_graph = ActivityGraphRenderer(
         patch_lengths=med_activity_patch_lengths,
         channel_mix=med_activity_channel_mix,
         router_temperature=med_activity_router_temperature,
@@ -612,18 +612,18 @@ def get_neurosigvit(
         tuple(int(length) for length in regime)
         for regime in med_activity_granularity_bank
     )
-    neurosigvit.adaptive_granularity_enabled = bool(
+    neurosigvia.adaptive_granularity_enabled = bool(
         med_activity_adaptive_granularity
     )
-    neurosigvit.feature_granularity_count = 1
-    neurosigvit.feature_granularity_labels = (
+    neurosigvia.feature_granularity_count = 1
+    neurosigvia.feature_granularity_labels = (
         "-".join(str(length) for length in base_patch_lengths),
     )
-    neurosigvit.feature_granularity_base_index = 0
-    neurosigvit.feature_layout = "single_embedding_v1"
-    neurosigvit.med_activity_granularity_bank = None
+    neurosigvia.feature_granularity_base_index = 0
+    neurosigvia.feature_layout = "single_embedding_v1"
+    neurosigvia.med_activity_granularity_bank = None
 
-    if neurosigvit.adaptive_granularity_enabled:
+    if neurosigvia.adaptive_granularity_enabled:
         if image_mode != "med_activity_graph":
             raise ValueError(
                 "Adaptive granularity is only available with "
@@ -633,7 +633,7 @@ def get_neurosigvit(
             base_patch_lengths,
             granularity_bank,
         )
-        neurosigvit.med_activity_granularity_bank = (
+        neurosigvia.med_activity_granularity_bank = (
             TemporalGranularityGraphBank(
                 patch_length_bank=granularity_bank,
                 channel_mix=med_activity_channel_mix,
@@ -641,18 +641,18 @@ def get_neurosigvit(
                 router_mix=med_activity_router_mix,
             )
         )
-        neurosigvit.feature_granularity_count = len(granularity_bank)
-        neurosigvit.feature_granularity_labels = tuple(
+        neurosigvia.feature_granularity_count = len(granularity_bank)
+        neurosigvia.feature_granularity_labels = tuple(
             "-".join(str(length) for length in regime)
             for regime in granularity_bank
         )
-        neurosigvit.feature_granularity_base_index = base_index
-        neurosigvit.feature_layout = feature_layout
+        neurosigvia.feature_granularity_base_index = base_index
+        neurosigvia.feature_layout = feature_layout
 
-    return neurosigvit
+    return neurosigvia
 
 
-class BaseNeuroSigViT(nn.Module, ABC):
+class BaseNeuroSigVIA(nn.Module, ABC):
     def __init__(
         self, processor, vit, layer_idx, aggregation, patch_size, stride, image_mode
     ):
@@ -742,7 +742,7 @@ class BaseNeuroSigViT(nn.Module, ABC):
                     "Mean aggregation expects [batch, cls+patches, hidden] with "
                     f"at least one patch token, got {tuple(hidden_states.shape)}."
                 )
-            # NeuroSigViT mean-pools spatial patch tokens only.  The leading
+            # NeuroSigVIA mean-pools spatial patch tokens only.  The leading
             # OpenCLIP/HuggingFace token is the CLS token and is deliberately
             # excluded from the activity-graph representation.
             pooled = hidden_states[:, 1:, :].mean(dim=1)
@@ -867,7 +867,7 @@ class BaseNeuroSigViT(nn.Module, ABC):
         return image_input
 
 
-class NeuroSigViT_HF(BaseNeuroSigViT):
+class NeuroSigVIA_HF(BaseNeuroSigVIA):
     def __init__(
         self, processor, vit, layer_idx, aggregation, patch_size, stride, image_mode
     ):
@@ -903,7 +903,7 @@ class NeuroSigViT_HF(BaseNeuroSigViT):
             return torch.stack(outputs.hidden_states, dim=-1)
 
 
-class NeuroSigViT_OpenCLIP(BaseNeuroSigViT):
+class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
     def __init__(
         self, processor, vit, layer_idx, aggregation, patch_size, stride, image_mode
     ):
@@ -939,7 +939,7 @@ class NeuroSigViT_OpenCLIP(BaseNeuroSigViT):
     def project_pooled_representation(self, pooled):
         # OpenCLIP ViT-H/14 has transformer width 1280 and a learned 1024-D
         # output projection.  Applying the frozen post norm/projection makes
-        # the implementation match NeuroSigViT Eq. (5), while keeping the
+        # the implementation match NeuroSigVIA Eq. (5), while keeping the
         # selected intermediate transformer depth fixed.
         if hasattr(self.vit, "ln_post"):
             pooled = self.vit.ln_post(pooled)

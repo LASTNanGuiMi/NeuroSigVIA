@@ -55,14 +55,14 @@ from src.datautils import (
 )
 from src.embedding import concat_embeddings, embed
 from src.mlp_classifier import train_mlp_classifier
-from src.neurosigvit import get_neurosigvit
+from src.neurosigvia import get_neurosigvia
 from src.patch_mindts import (
     PATCH_MINDTS_ARCHITECTURE,
     train_patch_mindts_classifier,
 )
-from src.timemosaic_graph_training import (
-    TIMEMOSAIC_GRAPH_ARCHITECTURE,
-    train_timemosaic_graph_classifier,
+from src.adaptive_graph_training import (
+    NEUROSIGVIA_ARCHITECTURE,
+    train_neurosigvia_classifier,
 )
 from src.privacy import anonymize_runtime_arguments, anonymize_runtime_value
 from src.utils import (
@@ -271,10 +271,9 @@ def _feature_extractor_code_identity():
     """Hash only code that can alter frozen candidate features."""
     project_root = Path(__file__).resolve().parent
     full_source_paths = (
-        Path("src/neurosigvit.py"),
+        Path("src/neurosigvia.py"),
         Path("src/utils.py"),
-        Path("src/medformer_graph/__init__.py"),
-        Path("src/medformer_graph/renderer.py"),
+        Path("src/activity_graph.py"),
     )
     manifest = hashlib.sha256()
     file_hashes = {}
@@ -288,7 +287,7 @@ def _feature_extractor_code_identity():
 
     extraction_functions = {
         "_set_trainable",
-        "_forward_neurosigvit_batch",
+        "_forward_neurosigvia_batch",
         "_forward_moment_batch",
         "_forward_mantis_batch",
         "forward_feature_batch",
@@ -359,10 +358,9 @@ def _patch_feature_extractor_code_identity():
     """Hash the structured patch feature path independently of legacy ATGS."""
     project_root = Path(__file__).resolve().parent
     source_paths = (
-        Path("src/neurosigvit.py"),
+        Path("src/neurosigvia.py"),
         Path("src/utils.py"),
-        Path("src/medformer_graph/__init__.py"),
-        Path("src/medformer_graph/renderer.py"),
+        Path("src/activity_graph.py"),
     )
     manifest = hashlib.sha256()
     components = {}
@@ -447,18 +445,20 @@ def _patch_feature_extractor_code_identity():
 
 
 @lru_cache(maxsize=1)
-def _timemosaic_feature_extractor_code_identity():
-    """Hash the corrected pre-render TimeMosaic graph feature path."""
+def _adaptive_graph_feature_extractor_code_identity():
+    """Hash the corrected pre-render adaptive granularity graph feature path."""
     project_root = Path(__file__).resolve().parent
     source_paths = (
-        Path("src/neurosigvit.py"),
+        Path("src/neurosigvia.py"),
         Path("src/utils.py"),
         Path("src/patch_mindts.py"),
         Path("src/line_graph_cross_attention.py"),
-        Path("src/timemosaic_patch_pipeline.py"),
-        Path("src/timemosaic_graph_training.py"),
-        Path("src/medformer_graph/renderer.py"),
-        Path("src/medformer_graph/timemosaic_adaptive.py"),
+        Path("src/multimodal_fusion.py"),
+        Path("src/adaptive_graph_training.py"),
+        Path("src/activity_graph.py"),
+        Path("src/temporal_granularity.py"),
+        Path("src/adaptive_activity_graph.py"),
+        Path("src/provenance.py"),
     )
     manifest = hashlib.sha256()
     components = {}
@@ -511,10 +511,10 @@ def build_feature_cache_signature(
         getattr(args, "med_activity_adaptive_granularity", False)
     )
     patch_mindts = getattr(args, "modal_interaction", None) == "patch_mindts"
-    timemosaic_graph = (
-        getattr(args, "modal_interaction", None) == "patch_timemosaic_graph"
+    adaptive_graph = (
+        getattr(args, "modal_interaction", None) == "adaptive_granularity"
     )
-    integrity_hashed_features = adaptive_granularity or timemosaic_graph
+    integrity_hashed_features = adaptive_granularity or adaptive_graph
     if integrity_hashed_features and any(
         identity is None
         for identity in (
@@ -561,7 +561,7 @@ def build_feature_cache_signature(
         # frozen-feature caches continue to match bit for bit.
         "schema": (
             10
-            if timemosaic_graph
+            if adaptive_graph
             else 9
             if patch_mindts
             else 7
@@ -589,18 +589,18 @@ def build_feature_cache_signature(
         "image_mode": args.image_mode,
         "med_activity_patch_lengths": (
             None
-            if patch_mindts or timemosaic_graph
+            if patch_mindts or adaptive_graph
             else args.med_activity_patch_lengths
         ),
         "med_activity_channel_mix": args.med_activity_channel_mix,
         "med_activity_router_temperature": (
             None
-            if patch_mindts or timemosaic_graph
+            if patch_mindts or adaptive_graph
             else args.med_activity_router_temperature
         ),
         "med_activity_router_mix": (
             None
-            if patch_mindts or timemosaic_graph
+            if patch_mindts or adaptive_graph
             else args.med_activity_router_mix
         ),
         "aggregation": args.aggregation,
@@ -631,11 +631,11 @@ def build_feature_cache_signature(
         ),
         "moment": args.moment,
     }
-    if timemosaic_graph:
+    if adaptive_graph:
         configuration.update(
             {
                 "feature_layout": "raw_windows_line_mantis_v1",
-                "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+                "architecture": NEUROSIGVIA_ARCHITECTURE,
                 "outer_patch_size": args.outer_patch_size,
                 "outer_patch_stride": args.outer_patch_stride,
                 "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
@@ -643,16 +643,16 @@ def build_feature_cache_signature(
                 "activity_graph_selection": (
                     "raw_region_16_hard_st_4_8_16_before_graph_propagation"
                 ),
-                "timemosaic_gate_temperature": args.timemosaic_gate_temperature,
-                "timemosaic_selector_balance_weight": (
-                    args.timemosaic_selector_balance_weight
+                "granularity_gate_temperature": args.granularity_gate_temperature,
+                "granularity_balance_weight": (
+                    args.granularity_balance_weight
                 ),
-                "timemosaic_graph_token_grid": args.timemosaic_graph_token_grid,
-                "timemosaic_gate_checkpoint_identity": _checkpoint_identity(
-                    args.timemosaic_gate_checkpoint,
+                "granularity_graph_token_grid": args.granularity_graph_token_grid,
+                "granularity_gate_checkpoint_identity": _checkpoint_identity(
+                    args.granularity_gate_checkpoint,
                     "full",
                 ),
-                "timemosaic_freeze_gate": args.timemosaic_freeze_gate,
+                "granularity_freeze_gate": args.granularity_freeze_gate,
                 "split_input_identity": split_input_identity,
                 "feature_code_identity": feature_code_identity,
                 "runtime_identity": runtime_identity,
@@ -739,15 +739,15 @@ if __name__ == "__main__":
     os.makedirs(result_dir, exist_ok=False)
 
     patch_mindts_enabled = args.modal_interaction == "patch_mindts"
-    timemosaic_graph_enabled = (
-        args.modal_interaction == "patch_timemosaic_graph"
+    adaptive_graph_enabled = (
+        args.modal_interaction == "adaptive_granularity"
     )
     patch_router_mode = args.patch_granularity_router_mode
     patch_router_v5 = patch_mindts_enabled and patch_router_mode == "adaptive_v5"
     run_protocol = {
         "schema": (
             7
-            if timemosaic_graph_enabled
+            if adaptive_graph_enabled
             else 6
             if patch_router_v5
             else 5
@@ -779,16 +779,16 @@ if __name__ == "__main__":
         ),
         "metric_unit": (
             "window_and_subject_when_subject_ids_available"
-            if patch_mindts_enabled or timemosaic_graph_enabled
+            if patch_mindts_enabled or adaptive_graph_enabled
             else "processed_one_second_window"
             if args.datasets == "eeg"
             else "sample"
         ),
     }
-    if timemosaic_graph_enabled:
+    if adaptive_graph_enabled:
         run_protocol.update(
             {
-                "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+                "architecture": NEUROSIGVIA_ARCHITECTURE,
                 "outer_patch_size": args.outer_patch_size,
                 "outer_patch_stride": args.outer_patch_stride,
                 "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
@@ -804,21 +804,21 @@ if __name__ == "__main__":
                     "hard_straight_through_gumbel_softmax"
                 ),
                 "granularity_selection_evaluation": "argmax_one_hot",
-                "timemosaic_gate_temperature": args.timemosaic_gate_temperature,
-                "timemosaic_selector_balance_weight": (
-                    args.timemosaic_selector_balance_weight
+                "granularity_gate_temperature": args.granularity_gate_temperature,
+                "granularity_balance_weight": (
+                    args.granularity_balance_weight
                 ),
-                "timemosaic_gate_checkpoint": (
-                    anonymize_runtime_value(args.timemosaic_gate_checkpoint)
-                    if args.timemosaic_gate_checkpoint
+                "granularity_gate_checkpoint": (
+                    anonymize_runtime_value(args.granularity_gate_checkpoint)
+                    if args.granularity_gate_checkpoint
                     else None
                 ),
-                "timemosaic_freeze_gate": args.timemosaic_freeze_gate,
+                "granularity_freeze_gate": args.granularity_freeze_gate,
                 "visual_fusion": (
                     "pooled_line_query_activity_graph_spatial_key_value_"
                     "cross_attention"
                 ),
-                "graph_spatial_token_grid": args.timemosaic_graph_token_grid,
+                "graph_spatial_token_grid": args.granularity_graph_token_grid,
                 "alignment_scope": (
                     "symmetric_within_sample_N_by_N_visual_mantis_no_cross_"
                     "batch_negatives"
@@ -885,7 +885,7 @@ if __name__ == "__main__":
                     if patch_router_mode == "uniform"
                     else "dataset_prior_sample_global_query_patch_local_query_v4"
                 ),
-                "granularity_expert_pattern": "parallel_multiscale_pathformer_inspired",
+                "granularity_expert_pattern": "parallel_multiscale_experts",
                 "granularity_expert_encoding": (
                     "single_scale_neutral_rgb_v3"
                     if all(
@@ -895,8 +895,8 @@ if __name__ == "__main__":
                     else "legacy_three_scale_rgb_v2"
                 ),
                 "granularity_reference_boundary": (
-                    "time_mosaic_inspires_patch_local_scope_pathformer_inspires_"
-                    "topk_experts_line_q_graph_kv_scoring_is_project_specific"
+                    "per_window_topk_experts_with_project_specific_line_q_graph_kv_"
+                    "scoring_see_SOURCE_NOTES.md"
                 ),
                 "granularity_weight_layout": "one_shared_distribution_per_patch_BNK",
                 "granularity_route_density": (
@@ -1214,7 +1214,7 @@ if __name__ == "__main__":
         print("Samples: ", sample_count)
         if (
             args.image_mode in {"activity_graph", "med_activity_graph"}
-            and not timemosaic_graph_enabled
+            and not adaptive_graph_enabled
         ):
             save_activity_graph_samples(
                 result_dir=result_dir,
@@ -1243,7 +1243,7 @@ if __name__ == "__main__":
             )
         elif (
             args.image_mode == "multichannel_line_plot"
-            or timemosaic_graph_enabled
+            or adaptive_graph_enabled
         ):
             save_activity_lineplot_samples(
                 result_dir=result_dir,
@@ -1313,15 +1313,15 @@ if __name__ == "__main__":
             patch_sizes = [None]
 
         for p in patch_sizes:
-            neurosigvit_1 = None
-            neurosigvit_2 = None
+            neurosigvia_1 = None
+            neurosigvia_2 = None
 
             if p:
                 print(f"Patch size: {p}")
 
-            # Embedding with the NeuroSigViT visual branch (1st ViT configuration)
+            # Embedding with the NeuroSigVIA visual branch (1st ViT configuration)
             if args.vit_1_name:
-                neurosigvit_1 = get_neurosigvit(
+                neurosigvia_1 = get_neurosigvia(
                     model_name=args.vit_1_name,
                     model_layer=args.vit_1_layer,
                     aggregation=args.aggregation,
@@ -1341,13 +1341,13 @@ if __name__ == "__main__":
                         args.med_activity_granularity_bank
                     ),
                 )
-                neurosigvit_1 = neurosigvit_1.to(device=device)
-                neurosigvit_1.eval()
+                neurosigvia_1 = neurosigvia_1.to(device=device)
+                neurosigvia_1.eval()
 
                 if args.classifier_type != "mlp":
                     vision_embedding_1 = embed_loader_splits(
-                        neurosigvit_1,
-                        "neurosigvit",
+                        neurosigvia_1,
+                        "neurosigvia",
                         channels,
                         device,
                         train_loader,
@@ -1355,9 +1355,9 @@ if __name__ == "__main__":
                         vali_loader=vali_loader,
                     )
 
-            # Embedding with the NeuroSigViT visual branch (2nd ViT configuration)
+            # Embedding with the NeuroSigVIA visual branch (2nd ViT configuration)
             if args.vit_2_name:
-                neurosigvit_2 = get_neurosigvit(
+                neurosigvia_2 = get_neurosigvia(
                     model_name=args.vit_2_name,
                     model_layer=args.vit_2_layer,
                     aggregation=args.aggregation,
@@ -1377,13 +1377,13 @@ if __name__ == "__main__":
                         args.med_activity_granularity_bank
                     ),
                 )
-                neurosigvit_2 = neurosigvit_2.to(device=device)
-                neurosigvit_2.eval()
+                neurosigvia_2 = neurosigvia_2.to(device=device)
+                neurosigvia_2.eval()
 
                 if args.classifier_type != "mlp":
                     vision_embedding_2 = embed_loader_splits(
-                        neurosigvit_2,
-                        "neurosigvit",
+                        neurosigvia_2,
+                        "neurosigvia",
                         channels,
                         device,
                         train_loader,
@@ -1402,7 +1402,7 @@ if __name__ == "__main__":
                         adaptive_runtime_identity = None
                         if (
                             args.med_activity_adaptive_granularity
-                            or timemosaic_graph_enabled
+                            or adaptive_graph_enabled
                         ):
                             adaptive_split_identity = _split_input_identity(
                                 train_loader=train_loader,
@@ -1412,9 +1412,9 @@ if __name__ == "__main__":
                                 vali_loader=vali_loader,
                                 vali_labels=vali_labels,
                             )
-                            if timemosaic_graph_enabled:
+                            if adaptive_graph_enabled:
                                 adaptive_feature_code_identity = (
-                                    _timemosaic_feature_extractor_code_identity()
+                                    _adaptive_graph_feature_extractor_code_identity()
                                 )
                             elif args.modal_interaction == "patch_mindts":
                                 adaptive_feature_code_identity = (
@@ -1462,9 +1462,9 @@ if __name__ == "__main__":
                             encoding="utf-8",
                         )
                         print(f"Feature cache key: {feature_cache_key}")
-                    if args.modal_interaction == "patch_timemosaic_graph":
+                    if args.modal_interaction == "adaptive_granularity":
                         val_metrics, test_metrics, train_indices, val_indices = (
-                            train_timemosaic_graph_classifier(
+                            train_neurosigvia_classifier(
                                 train_loader=train_loader,
                                 train_labels=train_labels,
                                 test_loader=test_loader,
@@ -1521,7 +1521,7 @@ if __name__ == "__main__":
                                 visual_encode_batch_size=(
                                     args.visual_encode_batch_size
                                 ),
-                                vision_model=neurosigvit_1,
+                                vision_model=neurosigvia_1,
                                 mantis_model=mantis_model,
                                 val_loader=vali_loader,
                                 val_labels=vali_labels,
@@ -1530,26 +1530,26 @@ if __name__ == "__main__":
                                     feature_cache_signature
                                 ),
                                 gate_temperature=(
-                                    args.timemosaic_gate_temperature
+                                    args.granularity_gate_temperature
                                 ),
                                 channel_mix=args.med_activity_channel_mix,
                                 selector_balance_weight=(
-                                    args.timemosaic_selector_balance_weight
+                                    args.granularity_balance_weight
                                 ),
                                 checkpoint_metric=args.patch_checkpoint_metric,
                                 channel_hidden_dim=(
                                     args.med_activity_granularity_hidden_dim
                                 ),
                                 graph_token_grid=(
-                                    args.timemosaic_graph_token_grid
+                                    args.granularity_graph_token_grid
                                 ),
                                 gate_checkpoint=(
-                                    args.timemosaic_gate_checkpoint
+                                    args.granularity_gate_checkpoint
                                 ),
-                                freeze_gate=args.timemosaic_freeze_gate,
+                                freeze_gate=args.granularity_freeze_gate,
                                 artifact_dir=(
                                     Path(result_dir)
-                                    / "timemosaic_graph"
+                                    / "adaptive_graph"
                                     / str(dataset)
                                     .replace("/", "_")
                                     .replace("\\", "_")
@@ -1602,7 +1602,7 @@ if __name__ == "__main__":
                                 visual_encode_batch_size=(
                                     args.visual_encode_batch_size
                                 ),
-                                vision_model=neurosigvit_1,
+                                vision_model=neurosigvia_1,
                                 mantis_model=mantis_model,
                                 val_loader=vali_loader,
                                 val_labels=vali_labels,
@@ -1738,10 +1738,10 @@ if __name__ == "__main__":
                             mask_prob=args.mask_prob,
                             pretrain_epochs=args.pretrain_epochs,
                             vision_model_1=(
-                                neurosigvit_1 if args.vit_1_name else None
+                                neurosigvia_1 if args.vit_1_name else None
                             ),
                             vision_model_2=(
-                                neurosigvit_2 if args.vit_2_name else None
+                                neurosigvia_2 if args.vit_2_name else None
                             ),
                             mantis_model=mantis_model,
                             moment_model=moment_model,

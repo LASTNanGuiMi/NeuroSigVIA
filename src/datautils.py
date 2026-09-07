@@ -610,7 +610,7 @@ def load_preprocessed_har(data_dir, dirname, channel_indices=None):
             f"{features.shape}."
         )
 
-    # Downloaded Medformer arrays use (N, T, C); NeuroSigViT expects (N, C, T).
+    # Downloaded Medformer arrays use (N, T, C); NeuroSigVIA expects (N, C, T).
     data = np.asarray(
         features[:, :, channel_indices], dtype=np.float32
     ).transpose(0, 2, 1)
@@ -1687,7 +1687,7 @@ def _make_wearable_tensor_loader(source_dataset, batch_size):
     if source_dataset.X is None or source_dataset.y is None:
         raise ValueError("Wearable source dataset did not load samples")
 
-    # The reference interface is [N,T,6]; NeuroSigViT consumes [N,6,T].
+    # The reference interface is [N,T,6]; NeuroSigVIA consumes [N,6,T].
     inputs = torch.from_numpy(source_dataset.X.transpose(0, 2, 1))
     tensor_dataset = TensorDataset(inputs)
     tensor_dataset.source_dataset = source_dataset
@@ -1812,7 +1812,7 @@ def _validate_wearable_bundle(bundle, reference_module):
         actual_shape = tuple(loader.dataset.tensors[0].shape)
         if actual_shape != expected_shape:
             raise AssertionError(
-                f"{bundle.dataset_name} split={split}: expected NeuroSigViT shape "
+                f"{bundle.dataset_name} split={split}: expected NeuroSigVIA shape "
                 f"{expected_shape}, got {actual_shape}"
             )
         if not np.array_equal(labels, source_dataset.y):

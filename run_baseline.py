@@ -1,4 +1,4 @@
-"""Retrain unmodified Medformer models on the fixed NeuroSigViT protocol.
+"""Retrain unmodified Medformer models on the fixed NeuroSigVIA protocol.
 
 Each invocation trains one model/dataset/initialization seed. The data split is
 fixed independently of that seed. Smoke runs retain the real sequence length,
@@ -63,7 +63,7 @@ def seed_training(seed):
 
 
 def metrics(y_true, probabilities):
-    """Match NeuroSigViT's macro one-vs-rest AUROC/AP convention."""
+    """Match NeuroSigVIA's macro one-vs-rest AUROC/AP convention."""
     labels = np.arange(probabilities.shape[1])
     y_pred = probabilities.argmax(axis=1)
     result = {

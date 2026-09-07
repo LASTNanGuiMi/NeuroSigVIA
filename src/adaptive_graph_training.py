@@ -1,9 +1,9 @@
-"""Independent training path for adaptive TimeMosaic-style Activity Graphs.
+"""Training and evaluation for NeuroSigVIA adaptive Activity Graphs.
 
 This module deliberately does not change the legacy ``patch_mindts`` cache or
 trainer.  Its static cache contains raw temporal windows plus frozen line-plot
 and Mantis features.  During every train/evaluation forward pass, the raw
-windows are routed by ``TimeMosaicAdaptiveActivityGraphRenderer`` to form one
+windows are routed by ``AdaptiveActivityGraphRenderer`` to form one
 Activity Graph, which is then encoded as spatial OpenCLIP tokens.  Consequently
 the granularity gate is part of graph construction and can receive gradients
 through the frozen visual encoder.
@@ -33,8 +33,12 @@ from torch.utils.data import DataLoader, SequentialSampler, Subset, TensorDatase
 from tqdm import tqdm
 
 from src.classifier import compute_metrics_from_predictions
-from src.medformer_graph.timemosaic_adaptive import (
-    TimeMosaicAdaptiveActivityGraphRenderer,
+from src.compatibility import (
+    is_previous_encoder_wrapper,
+    matches_checkpoint_architecture,
+)
+from src.adaptive_activity_graph import (
+    AdaptiveActivityGraphRenderer,
 )
 from src.patch_mindts import (
     PATCH_TAIL_POLICY,
@@ -53,22 +57,22 @@ from src.patch_mindts import (
     _subject_ids_digest,
     make_temporal_patches,
 )
-from src.timemosaic_patch_pipeline import (
+from src.multimodal_fusion import (
     OPENCLIP_SPATIAL_GRID_SIZE,
-    TimeMosaicPatchFusionModule,
+    AdaptiveGranularityFusionModule,
     compress_openclip_spatial_tokens,
 )
 from src.utils import get_split, set_random_seed
 
 
-TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION = 1
-TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE = "timemosaic_adaptive_graph_static_v1"
-TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION = 2
-TIMEMOSAIC_GRAPH_ARCHITECTURE = (
-    "timemosaic_adaptive_graph_crossattn_concatattn_v2"
+NEUROSIGVIA_CACHE_SCHEMA_VERSION = 1
+NEUROSIGVIA_CACHE_ARCHITECTURE = "neurosigvia_adaptive_graph_static_v1"
+NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION = 2
+NEUROSIGVIA_ARCHITECTURE = (
+    "neurosigvia_adaptive_graph_crossattn_concatattn_v2"
 )
 
-TIMEMOSAIC_GRAPH_STATIC_KEYS = (
+NEUROSIGVIA_STATIC_KEYS = (
     "raw_windows",
     "line_tokens",
     "mantis_channel_tokens",
@@ -94,6 +98,7 @@ def _sampled_module_state_fingerprint(
     module: nn.Module,
     *,
     values_per_tensor: int = 64,
+    wrapper_identity: str | None = None,
 ) -> str:
     """Fingerprint every state entry using metadata and fixed-position values.
 
@@ -101,11 +106,13 @@ def _sampled_module_state_fingerprint(
     to every run.  This fingerprint instead covers every parameter/buffer name,
     dtype, and shape plus evenly spaced values from each tensor.  The cache
     signature may additionally carry the full on-disk checkpoint manifest.
+    ``wrapper_identity`` recreates a known previous class prefix when checking
+    an existing contract; current contracts use the current class identity.
     """
+    if wrapper_identity is None:
+        wrapper_identity = f"{type(module).__module__}.{type(module).__qualname__}"
     digest = hashlib.sha256()
-    digest.update(
-        f"{type(module).__module__}.{type(module).__qualname__}".encode("utf-8")
-    )
+    digest.update(wrapper_identity.encode("utf-8"))
     named_state = [
         (f"parameter:{name}", tensor)
         for name, tensor in module.named_parameters()
@@ -184,6 +191,17 @@ def _assert_encoder_contract(
     role: str,
 ) -> dict[str, Any]:
     current = _encoder_contract(encoder, role)
+    comparison = current
+    if is_previous_encoder_wrapper(
+        expected.get("wrapper_class"), current["wrapper_class"]
+    ):
+        # Recreate the recorded class prefix while validating every current
+        # tensor and encoder setting against the unmodified old contract.
+        comparison = dict(current)
+        comparison["wrapper_class"] = expected["wrapper_class"]
+        comparison["sampled_state_sha256"] = _sampled_module_state_fingerprint(
+            encoder, wrapper_identity=expected["wrapper_class"]
+        )
     compared_keys = (
         "wrapper_class",
         "backbone_class",
@@ -195,9 +213,9 @@ def _assert_encoder_contract(
         "sampled_state_sha256",
     )
     mismatches = {
-        key: {"expected": expected.get(key), "actual": current.get(key)}
+        key: {"expected": expected.get(key), "actual": comparison.get(key)}
         for key in compared_keys
-        if expected.get(key) != current.get(key)
+        if expected.get(key) != comparison.get(key)
     }
     if mismatches:
         raise ValueError(
@@ -227,14 +245,14 @@ def _validate_static_bundle(
     expected_window_size: int | None = None,
     expected_channels: int | None = None,
 ) -> dict[str, torch.Tensor]:
-    missing = set(TIMEMOSAIC_GRAPH_STATIC_KEYS) - set(bundle)
+    missing = set(NEUROSIGVIA_STATIC_KEYS) - set(bundle)
     if missing:
         raise ValueError(
-            "TimeMosaic graph cache is missing " + ", ".join(sorted(missing))
+            "adaptive granularity graph cache is missing " + ", ".join(sorted(missing))
         )
-    values = {key: bundle[key] for key in TIMEMOSAIC_GRAPH_STATIC_KEYS}
+    values = {key: bundle[key] for key in NEUROSIGVIA_STATIC_KEYS}
     if not all(torch.is_tensor(value) for value in values.values()):
-        raise TypeError("all TimeMosaic graph cache entries must be tensors")
+        raise TypeError("all adaptive granularity graph cache entries must be tensors")
 
     raw = values["raw_windows"]
     line = values["line_tokens"]
@@ -304,7 +322,7 @@ def _validate_static_bundle(
     return values
 
 
-def save_timemosaic_graph_feature_cache(
+def save_adaptive_graph_feature_cache(
     path,
     bundle,
     labels,
@@ -328,9 +346,9 @@ def save_timemosaic_graph_feature_cache(
         raise ValueError("cache labels and feature sample count do not match")
     arrays: dict[str, np.ndarray] = {
         "schema_version": np.asarray(
-            TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION, dtype=np.int64
+            NEUROSIGVIA_CACHE_SCHEMA_VERSION, dtype=np.int64
         ),
-        "architecture": np.asarray(TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE),
+        "architecture": np.asarray(NEUROSIGVIA_CACHE_ARCHITECTURE),
         "cache_signature": np.asarray(str(signature or "")),
         "tail_policy": np.asarray(PATCH_TAIL_POLICY),
         "window_size": np.asarray(int(window_size), dtype=np.int64),
@@ -352,7 +370,7 @@ def save_timemosaic_graph_feature_cache(
         temporary_path.unlink(missing_ok=True)
 
 
-def load_timemosaic_graph_feature_cache(
+def load_adaptive_graph_feature_cache(
     path,
     labels,
     signature,
@@ -378,17 +396,17 @@ def load_timemosaic_graph_feature_cache(
             "window_size",
             "stride",
             "labels",
-            *TIMEMOSAIC_GRAPH_STATIC_KEYS,
+            *NEUROSIGVIA_STATIC_KEYS,
         }
         missing = required - set(cached.files)
         if missing:
             raise ValueError(f"cache is missing {sorted(missing)}: {path}")
         if int(cached["schema_version"].item()) != (
-            TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION
+            NEUROSIGVIA_CACHE_SCHEMA_VERSION
         ):
             raise ValueError(f"cache schema mismatch: {path}")
         if str(cached["architecture"].item()) != (
-            TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE
+            NEUROSIGVIA_CACHE_ARCHITECTURE
         ):
             raise ValueError(f"cache architecture mismatch: {path}")
         if str(cached["cache_signature"].item()) != str(signature or ""):
@@ -403,7 +421,7 @@ def load_timemosaic_graph_feature_cache(
             raise ValueError(f"cache labels do not match: {path}")
         bundle = {
             key: torch.from_numpy(cached[key].copy())
-            for key in TIMEMOSAIC_GRAPH_STATIC_KEYS
+            for key in NEUROSIGVIA_STATIC_KEYS
         }
     validated = _validate_static_bundle(
         bundle,
@@ -412,12 +430,12 @@ def load_timemosaic_graph_feature_cache(
     )
     if len(validated["raw_windows"]) != len(_cache_label_array(labels)):
         raise ValueError(f"cache sample count mismatch: {path}")
-    print(f"Loaded TimeMosaic graph static features: {path}")
+    print(f"Loaded adaptive granularity graph static features: {path}")
     return validated
 
 
 @torch.no_grad()
-def extract_timemosaic_graph_feature_batch(
+def extract_adaptive_graph_feature_batch(
     batch,
     vision_model,
     mantis_model,
@@ -530,10 +548,10 @@ def _extract_static_split(
             "static feature extraction requires a sequential source loader; "
             "a shuffled sampler would misalign cached samples and external labels"
         )
-    batches = {key: [] for key in TIMEMOSAIC_GRAPH_STATIC_KEYS}
+    batches = {key: [] for key in NEUROSIGVIA_STATIC_KEYS}
     for loader_batch in tqdm(
         loader,
-        desc="Extract TimeMosaic graph static features",
+        desc="Extract adaptive granularity graph static features",
         leave=False,
     ):
         if len(loader_batch) == 1:
@@ -545,7 +563,7 @@ def _extract_static_split(
             raise ValueError(
                 "feature loaders must yield (signals,) or (signals, lengths)"
             )
-        features = extract_timemosaic_graph_feature_batch(
+        features = extract_adaptive_graph_feature_batch(
             signals,
             vision_model,
             mantis_model,
@@ -555,7 +573,7 @@ def _extract_static_split(
             encode_batch_size=encode_batch_size,
             lengths=lengths,
         )
-        for key in TIMEMOSAIC_GRAPH_STATIC_KEYS:
+        for key in NEUROSIGVIA_STATIC_KEYS:
             batches[key].append(features[key])
     if not batches["raw_windows"]:
         raise ValueError("cannot extract features from an empty split")
@@ -591,9 +609,9 @@ def _get_static_split(
     cache_path = None
     if feature_cache_dir:
         cache_path = (
-            Path(feature_cache_dir) / f"timemosaic_graph_{split_name}.npz"
+            Path(feature_cache_dir) / f"adaptive_graph_{split_name}.npz"
         )
-        cached = load_timemosaic_graph_feature_cache(
+        cached = load_adaptive_graph_feature_cache(
             cache_path,
             labels,
             feature_cache_signature,
@@ -618,7 +636,7 @@ def _get_static_split(
             f"{split_name} loader sample count does not match supplied labels"
         )
     if cache_path is not None:
-        save_timemosaic_graph_feature_cache(
+        save_adaptive_graph_feature_cache(
             cache_path,
             bundle,
             labels,
@@ -626,11 +644,11 @@ def _get_static_split(
             window_size=window_size,
             stride=stride,
         )
-        print(f"Saved TimeMosaic graph static features: {cache_path}")
+        print(f"Saved adaptive granularity graph static features: {cache_path}")
     return bundle
 
 
-class TimeMosaicGraphClassifier(nn.Module):
+class NeuroSigVIAClassifier(nn.Module):
     """Trainable adaptive renderer plus visual/temporal fusion classifier."""
 
     def __init__(
@@ -668,7 +686,7 @@ class TimeMosaicGraphClassifier(nn.Module):
         ):
             raise ValueError("graph_token_grid must be an integer of at least 2")
         self.graph_token_grid = int(graph_token_grid)
-        self.renderer = TimeMosaicAdaptiveActivityGraphRenderer(
+        self.renderer = AdaptiveActivityGraphRenderer(
             img_size=graph_image_size,
             channel_mix=adaptive_channel_mix,
             temperature=adaptive_temperature,
@@ -676,7 +694,7 @@ class TimeMosaicGraphClassifier(nn.Module):
             freeze_gate=freeze_adaptive_gate,
             strict_gate_checkpoint=strict_gate_checkpoint,
         )
-        self.fusion = TimeMosaicPatchFusionModule(
+        self.fusion = AdaptiveGranularityFusionModule(
             visual_dim=visual_dim,
             temporal_dim=temporal_dim,
             num_channels=num_channels,
@@ -723,7 +741,7 @@ class TimeMosaicGraphClassifier(nn.Module):
         fusion_configuration["visual_token_count"] = self.graph_token_grid**2
         self.configuration: dict[str, Any] = {
             **self.constructor_configuration,
-            "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+            "architecture": NEUROSIGVIA_ARCHITECTURE,
             "renderer": self.renderer.provenance(),
             "fusion": fusion_configuration,
             "graph_count_per_valid_window": 1,
@@ -1270,11 +1288,11 @@ def _save_checkpoint(
 ) -> Path:
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    path = artifact_dir / "timemosaic_graph_checkpoint.pt"
+    path = artifact_dir / "neurosigvia_checkpoint.pt"
     temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     payload = {
-        "schema_version": TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION,
-        "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+        "schema_version": NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION,
+        "architecture": NEUROSIGVIA_ARCHITECTURE,
         "model_state_dict": _cpu_state_dict(model),
         "model_constructor_configuration": model.get_config(),
         "model_configuration": dict(model.configuration),
@@ -1288,10 +1306,10 @@ def _save_checkpoint(
             validation_subject_ids
         ),
         "feature_cache": {
-            "schema_version": TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION,
-            "architecture": TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE,
+            "schema_version": NEUROSIGVIA_CACHE_SCHEMA_VERSION,
+            "architecture": NEUROSIGVIA_CACHE_ARCHITECTURE,
             "signature": str(feature_cache_signature or ""),
-            "keys": list(TIMEMOSAIC_GRAPH_STATIC_KEYS),
+            "keys": list(NEUROSIGVIA_STATIC_KEYS),
         },
         "protocol": {
             "outer_patch_size": int(outer_patch_size),
@@ -1327,7 +1345,7 @@ def _save_checkpoint(
     return path
 
 
-def load_timemosaic_graph_checkpoint(
+def load_neurosigvia_checkpoint(
     path,
     *,
     map_location="cpu",
@@ -1339,7 +1357,7 @@ def load_timemosaic_graph_checkpoint(
 
     Supplying ``vision_model`` validates it immediately.  If omitted, the
     reconstructed model validates the first visual encoder passed to
-    :meth:`TimeMosaicGraphClassifier.forward`.  ``mantis_model`` can be
+    :meth:`NeuroSigVIAClassifier.forward`.  ``mantis_model`` can be
     supplied to validate the encoder used to create new cached Mantis tokens.
     """
     try:
@@ -1351,12 +1369,14 @@ def load_timemosaic_graph_checkpoint(
     except TypeError:
         payload = torch.load(path, map_location=map_location)
     if not isinstance(payload, Mapping):
-        raise TypeError("TimeMosaic graph checkpoint must contain a mapping")
-    if payload.get("schema_version") != TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION:
-        raise ValueError("TimeMosaic graph checkpoint schema mismatch")
-    if payload.get("architecture") != TIMEMOSAIC_GRAPH_ARCHITECTURE:
-        raise ValueError("TimeMosaic graph checkpoint architecture mismatch")
-    model = TimeMosaicGraphClassifier.from_config(
+        raise TypeError("adaptive granularity graph checkpoint must contain a mapping")
+    if payload.get("schema_version") != NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError("adaptive granularity graph checkpoint schema mismatch")
+    if not matches_checkpoint_architecture(
+        payload.get("architecture"), NEUROSIGVIA_ARCHITECTURE
+    ):
+        raise ValueError("adaptive granularity graph checkpoint architecture mismatch")
+    model = NeuroSigVIAClassifier.from_config(
         payload["model_constructor_configuration"]
     )
     model.load_state_dict(payload["model_state_dict"], strict=strict)
@@ -1378,7 +1398,7 @@ def load_timemosaic_graph_checkpoint(
     return model, payload
 
 
-def validate_timemosaic_graph_encoders(
+def validate_neurosigvia_encoders(
     checkpoint_payload: Mapping[str, Any],
     *,
     vision_model,
@@ -1399,7 +1419,7 @@ def validate_timemosaic_graph_encoders(
         _assert_encoder_contract(contracts["mantis"], mantis_model, "mantis")
 
 
-def train_timemosaic_graph_classifier(
+def train_neurosigvia_classifier(
     train_loader,
     train_labels,
     test_loader,
@@ -1523,7 +1543,7 @@ def train_timemosaic_graph_classifier(
         and hasattr(vision_transformer, "resblocks")
     ):
         raise ValueError(
-            "patch_timemosaic_graph requires the differentiable OpenCLIP visual "
+            "adaptive_granularity requires the differentiable OpenCLIP visual "
             "backbone; Hugging Face image processors detach rendered tensors"
         )
     if freeze_gate and gate_checkpoint is None:
@@ -1600,7 +1620,7 @@ def train_timemosaic_graph_classifier(
         val_indices,
     )
     print(
-        "TimeMosaic graph checkpoint selection: "
+        "adaptive granularity graph checkpoint selection: "
         f"requested={checkpoint_metric} effective={checkpoint_metric_effective}"
     )
 
@@ -1700,7 +1720,7 @@ def train_timemosaic_graph_classifier(
         if int(features["mantis_channel_tokens"].shape[-1]) != temporal_dim:
             raise ValueError(f"{split_name} Mantis feature dimension mismatch")
 
-    model = TimeMosaicGraphClassifier(
+    model = NeuroSigVIAClassifier(
         visual_dim=visual_dim,
         temporal_dim=temporal_dim,
         num_channels=channels,
@@ -1920,10 +1940,10 @@ def train_timemosaic_graph_classifier(
             external_encoder_contracts=external_encoder_contracts,
         )
         _atomic_json_dump(
-            Path(artifact_dir) / "timemosaic_graph_summary.json",
+            Path(artifact_dir) / "adaptive_graph_summary.json",
             {
-                "schema_version": TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION,
-                "architecture": TIMEMOSAIC_GRAPH_ARCHITECTURE,
+                "schema_version": NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION,
+                "architecture": NEUROSIGVIA_ARCHITECTURE,
                 "checkpoint": checkpoint_path.name,
                 "best_epoch": best_epoch,
                 "validation_metrics": val_metrics,
@@ -1948,16 +1968,16 @@ def train_timemosaic_graph_classifier(
 
 
 __all__ = [
-    "TIMEMOSAIC_GRAPH_ARCHITECTURE",
-    "TIMEMOSAIC_GRAPH_CACHE_ARCHITECTURE",
-    "TIMEMOSAIC_GRAPH_CACHE_SCHEMA_VERSION",
-    "TIMEMOSAIC_GRAPH_CHECKPOINT_SCHEMA_VERSION",
-    "TIMEMOSAIC_GRAPH_STATIC_KEYS",
-    "TimeMosaicGraphClassifier",
-    "extract_timemosaic_graph_feature_batch",
-    "load_timemosaic_graph_checkpoint",
-    "load_timemosaic_graph_feature_cache",
-    "save_timemosaic_graph_feature_cache",
-    "train_timemosaic_graph_classifier",
-    "validate_timemosaic_graph_encoders",
+    "NEUROSIGVIA_ARCHITECTURE",
+    "NEUROSIGVIA_CACHE_ARCHITECTURE",
+    "NEUROSIGVIA_CACHE_SCHEMA_VERSION",
+    "NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION",
+    "NEUROSIGVIA_STATIC_KEYS",
+    "NeuroSigVIAClassifier",
+    "extract_adaptive_graph_feature_batch",
+    "load_neurosigvia_checkpoint",
+    "load_adaptive_graph_feature_cache",
+    "save_adaptive_graph_feature_cache",
+    "train_neurosigvia_classifier",
+    "validate_neurosigvia_encoders",
 ]

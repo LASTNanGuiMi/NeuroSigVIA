@@ -9,11 +9,11 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw
 from torchvision.utils import save_image
 
-from src.medformer_graph import (
-    MedformerGraphRenderer,
+from src.activity_graph import (
+    ActivityGraphRenderer,
     TemporalGranularityGraphBank,
 )
-from src.neurosigvit import preprocess_graph
+from src.neurosigvia import preprocess_graph
 
 
 def set_random_seed(seed):
@@ -165,7 +165,7 @@ def save_activity_graph_samples(
                 router_mix=med_activity_router_mix,
             )
         else:
-            transform = MedformerGraphRenderer(
+            transform = ActivityGraphRenderer(
                 patch_lengths=med_activity_patch_lengths,
                 channel_mix=med_activity_channel_mix,
                 router_temperature=med_activity_router_temperature,

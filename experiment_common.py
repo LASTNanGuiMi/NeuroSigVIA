@@ -1,61 +1,24 @@
-"""Shared data, pretrained-weight, and graph configuration for selector runs.
-
-The experiment protocol is identical to the archived TimeMosaic comparison.
-Machine-specific paths are supplied through environment variables so the
-public source remains portable:
-
-``NEUROSIGVIT_EEG_ROOT``
-    Directory containing the processed ADFTD, TDBRAIN, and APAVA bundles.
-``NEUROSIGVIT_WEARABLE_ROOT``
-    Directory containing the Shimmer10 and PADS11 dataset directories.
-``NEUROSIGVIT_CLIP_PATH``
-    Local CLIP-ViT-H-14 checkpoint directory.
-``NEUROSIGVIT_MANTIS_PATH``
-    Local Mantis-8M checkpoint directory.
-"""
-import contextlib,hashlib,io,json,os,time
+"""Shared fixed-split data loading and integrity checks for NeuroSigVIA baselines."""
+import contextlib
+import hashlib
+import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
+
 import numpy as np
 import torch
-from torch.utils.data import DataLoader,TensorDataset
-from src.datautils import get_eeg_medformer_dataloaders,get_wearable_dataloaders
+from torch.utils.data import DataLoader, TensorDataset
+
+from src.datautils import get_eeg_medformer_dataloaders, get_wearable_dataloaders
+
 ROOT=Path(__file__).resolve().parent
-EEG_ROOT=Path(os.environ.get('NEUROSIGVIT_EEG_ROOT',ROOT/'data'/'eeg')).expanduser()
-WEARABLE_ROOT=Path(os.environ.get('NEUROSIGVIT_WEARABLE_ROOT',ROOT/'data'/'wearable')).expanduser()
-VISION_PATH=Path(os.environ.get(
-    'NEUROSIGVIT_CLIP_PATH',ROOT/'pretrained'/'CLIP-ViT-H-14-laion2B-s32B-b79K'
-)).expanduser()
-MANTIS_PATH=Path(os.environ.get(
-    'NEUROSIGVIT_MANTIS_PATH',ROOT/'pretrained'/'Mantis-8M'
-)).expanduser()
+EEG_ROOT=Path(os.environ.get('NEUROSIGVIA_EEG_ROOT',ROOT/'data'/'eeg')).expanduser()
+WEARABLE_ROOT=Path(os.environ.get('NEUROSIGVIA_WEARABLE_ROOT',ROOT/'data'/'wearable')).expanduser()
 
 DATASETS={'adftd':('ADFTD','eeg',None,8),'tdbrain':('TDBRAIN','eeg',None,8),
  'apava':('APAVA','eeg',None,8),'shimmer10':('Shimmer_10_session10_AFC','wearable','shimmer_hc_vs_pd',1),
  'pads11':('PADS_11_task08_TouchIndex','wearable','pads_pd_vs_hc',4)}
-
-def write_json(path,value):
-    path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    temporary=path.with_name(path.name+f'.{os.getpid()}.tmp')
-    temporary.write_text(json.dumps(value,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
-    os.replace(temporary,path)
-
-def digest_file(path):
-    h=hashlib.sha256()
-    with open(path,'rb') as stream:
-        for block in iter(lambda:stream.read(8*1024*1024),b''): h.update(block)
-    return h.hexdigest()
-
-def canonical_hash(value):
-    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-
-def weight_manifest():
-    result={}
-    for name,root in [('clip',VISION_PATH),('mantis',MANTIS_PATH)]:
-        files=[p for p in sorted(root.iterdir()) if p.is_file() and p.suffix in {'.pt','.pth','.bin','.safetensors','.json'}]
-        if not any(p.suffix!='.json' for p in files): raise ValueError('Missing pinned pretrained weights')
-        result[name]={p.name:digest_file(p) for p in files}
-    return result
 
 def load_data(key,smoke=False):
     name,kind,mode,batch=DATASETS[key]
@@ -92,23 +55,3 @@ def load_data(key,smoke=False):
     if any(overlap): raise ValueError('Subject overlap')
     manifest['subject_overlap']=overlap
     return bundle,manifest
-
-def benchmark_graphs(bank,example,device):
-    example=example[:1,:,:64].to(device)
-    bank.eval()
-    with torch.no_grad():
-        images=bank(example)
-        if images.shape!=(1,3,3,224,224) or not torch.isfinite(images).all():
-            raise ValueError('Invalid graph bank')
-        if images.min()<0 or images.max()>1: raise ValueError('Image range')
-        torch.testing.assert_close(images[:,:,0],images[:,:,1],rtol=0,atol=0)
-        torch.testing.assert_close(images[:,:,1],images[:,:,2],rtol=0,atol=0)
-        differences=[float((images[:,i]-images[:,j]).abs().mean()) for i,j in [(0,1),(0,2),(1,2)]]
-        if not all(v>1e-7 for v in differences): raise ValueError('Duplicated scale candidates')
-        for _ in range(2): bank(example)
-        torch.cuda.synchronize(); start=time.monotonic()
-        for _ in range(10): bank(example)
-        torch.cuda.synchronize()
-        return {'input':[1,int(example.shape[1]),64],'image_shape':list(images.shape),
-                'mean_ms_per_window':(time.monotonic()-start)*100,
-                'candidate_pairwise_image_l1':differences}
