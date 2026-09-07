@@ -6,6 +6,8 @@ Activity Graph granularity before graph rendering, combines line-plot and
 Activity-Graph visual features with cross-attention, and aligns the resulting
 visual representation with frozen Mantis-8M temporal features.
 
+![NeuroSigVIA method overview](assets/neurosigvit_method.jpg)
+
 The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 `Shimmer_10_session10_AFC`, and `PADS_11_task08_TouchIndex`.
 
@@ -58,6 +60,8 @@ NeuroSigVIA-main/
 |       `-- PADS_11_task08_TouchIndex/
 |-- data_loading/
 |   `-- split_reference_seed42.csv
+|-- assets/
+|   `-- neurosigvit_method.jpg
 |-- scripts/
 |   |-- NeuroSigVIA.sh
 |   |-- Medformer.sh
