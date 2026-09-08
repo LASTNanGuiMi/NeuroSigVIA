@@ -35,6 +35,7 @@ NeuroSigVIA/
 |   |-- neurosigvia.py
 |   `-- baselines.py
 |-- third_party/medformer/
+|-- third_party/timesnet/
 |-- src/
 |   |-- README.md
 |   |-- neurosigvia.py
@@ -74,6 +75,7 @@ NeuroSigVIA/
 |   |-- Autoformer.sh
 |   |-- PatchTST.sh
 |   |-- Transformer.sh
+|   |-- TimesNet.sh
 |   `-- lib/experiments.sh
 |-- tests/
 |-- DATA_PROCESSING.md
@@ -212,16 +214,37 @@ components do not constitute a complete AGCNN reproduction. See
 [source and adaptation credits](SOURCE_NOTES.md) for both paper sources and
 their implementation boundaries.
 
-Each method has one script with a direct Python classification command, following Medformer's method-script layout. Each entry runs all five datasets for training seeds 42, 43 and 44:
+Each method has one script with a direct Python classification command, following Medformer's method-script layout. The existing method scripts default to all five datasets for training seeds 42, 43 and 44; TimesNet defaults to the four non-ADFTD datasets:
 
 ```bash
 conda activate neurosigvia
 bash scripts/NeuroSigVIA.sh
 ```
 
-The six comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`, `Autoformer.sh`, `PatchTST.sh`, and `Transformer.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. Model sources are copied unchanged from Medformer into `third_party/medformer/`, including their MIT license, commit and per-file hashes. Install the additional import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
+The seven comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`, `Autoformer.sh`, `PatchTST.sh`, `Transformer.sh`, and `TimesNet.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. The first six model implementations are copied unchanged from Medformer into `third_party/medformer/`; TimesNet is copied from the official Time-Series-Library into `third_party/timesnet/`. Both vendor directories retain their MIT license, pinned commit and per-file hashes. Install the additional Medformer import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
 
-Defaults use GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
+After activating the environment, run TimesNet with:
+
+```bash
+bash scripts/TimesNet.sh
+```
+
+Its defaults are TDBRAIN/APAVA/Shimmer10/PADS11 on GPUs 0/1/2/3, batch sizes
+8/8/1/4, and sequential training seeds 42/43/44 on each GPU. The call chain is
+`scripts/TimesNet.sh` -> `scripts/lib/experiments.sh` -> `runners.baselines` ->
+`third_party/timesnet/models/TimesNet.py::Model`. The adapter transposes loader
+inputs from `[B,C,T]` to `[B,T,C]`, supplies an all-ones padding mask, and uses
+the official classification head. Window probabilities are averaged per
+subject before computing the six subject-level metrics.
+
+Shared baseline settings are split seed 42, `d_model=128`, `d_ff=256`, two
+layers, dropout 0.1, AdamW learning rate `3e-4`, weight decay `1e-3`, at most
+100 epochs, and early stopping with warmup 10, patience 12 and `min_delta=0.002`.
+TimesNet uses `top_k=3` and `num_kernels=6`; the shared `n_heads=8` is unused by
+its convolution architecture. See [TimesNet integration](third_party/timesnet/INTEGRATION.md)
+for verification and interpreter examples.
+
+The other method scripts default to GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
 ```bash
 tmux new-session -s neurosigvia
@@ -254,7 +277,7 @@ Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEE
 
 The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. Defaults are 100 epochs with existing early stopping (warmup 10, patience 12) and batch sizes 8/8/8/1/4. Both trainers select on validation subject Macro-F1. Baselines use AdamW, balanced cross entropy, mean subject probabilities and one final test evaluation after restoring the best checkpoint. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
-The six baseline scripts supply a shared starting configuration, not
+The seven baseline scripts supply a shared starting configuration, not
 original-paper tuned settings or completed benchmark results. Keep
 hyperparameter changes in the corresponding method script so the same
 `bash scripts/<Method>.sh` command reproduces its saved configuration. The
@@ -288,6 +311,7 @@ old graph-model checkpoints are invalidated by the new graph implementation.
 
 Current method components are organized by function. The Medformer baseline
 and the other five baseline implementations are under `third_party/medformer/`.
+The official TimesNet model and its required layers are under `third_party/timesnet/`.
 
 | Entry | Purpose |
 | --- | --- |
@@ -298,7 +322,8 @@ and the other five baseline implementations are under `third_party/medformer/`.
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/NeuroSigVIA.sh` and six baseline method scripts | Five datasets and three seeds per method |
+| `scripts/NeuroSigVIA.sh` and seven baseline method scripts | Three seeds; TimesNet defaults to four non-ADFTD datasets, other scripts to five |
+| `third_party/timesnet/` | Pinned official TimesNet model, required layers, MIT license and integration notes |
 | `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |
 | `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |
 | `src/patch_mindts.py`, `src/mlp_classifier.py` | Shared window, encoder and fusion utilities, plus retained Patch-MindTS / Router paths |
@@ -316,7 +341,7 @@ benchmark results or establish equivalence between development and snapshot runs
 ## Verification
 
 ```bash
-python -m compileall -q main.py runners src data_loading tests third_party/medformer
+python -m compileall -q main.py runners src data_loading tests third_party/medformer third_party/timesnet
 for script in scripts/*.sh; do bash -n "$script"; done
 ```
 

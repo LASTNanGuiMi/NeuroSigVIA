@@ -1,4 +1,4 @@
-"""Retrain unmodified Medformer models on the fixed NeuroSigVIA protocol.
+"""Retrain vendored baseline models on the fixed NeuroSigVIA protocol.
 
 Each invocation trains one model/dataset/initialization seed. The data split is
 fixed independently of that seed. Smoke runs retain the real sequence length,
@@ -28,9 +28,10 @@ from sklearn.metrics import (
     recall_score, roc_auc_score,
 )
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS = ("Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer")
+MODELS = ("Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer", "TimesNet")
 DATASETS = ("adftd", "tdbrain", "apava", "shimmer10", "pads11")
 DEFAULT_BATCH = dict(adftd=8, tdbrain=8, apava=8, shimmer10=1, pads11=4)
 CLASS_NAMES = {"adftd": ["HC", "FTD", "AD"], "tdbrain": ["HC", "PD"],
@@ -148,6 +149,7 @@ def model_config(args, sequence_length, channels, num_classes):
         label_len=48, moving_avg=25, single_channel=False, no_inter_attn=False,
         patch_len_list=args.patch_len_list, augmentations=args.augmentations,
         patch_len=args.patch_len, stride=args.stride,
+        top_k=args.top_k, num_kernels=args.num_kernels,
     )
 
 
@@ -155,8 +157,8 @@ def import_model(name, vendor_root):
     vendor_root = Path(vendor_root).resolve()
     model_path = vendor_root / "models" / f"{name}.py"
     if not model_path.is_file():
-        raise FileNotFoundError(f"Vendored Medformer model is missing: {model_path}")
-    # Original Medformer imports use the top-level names models/layers/utils.
+        raise FileNotFoundError(f"Vendored baseline model is missing: {model_path}")
+    # Both upstream projects use the top-level names models/layers/utils.
     for package in ("models", "layers", "utils"):
         existing = sys.modules.get(package)
         if existing is not None:
@@ -240,7 +242,7 @@ def parser():
     cli.add_argument("--random_seed", type=int, default=42)
     cli.add_argument("--split_seed", type=int, choices=(42,), default=42)
     cli.add_argument("--result_dir", type=Path, required=True)
-    cli.add_argument("--vendor_root", type=Path, default=ROOT / "third_party/medformer")
+    cli.add_argument("--vendor_root", type=Path, help="Defaults to the selected model's vendored upstream")
     cli.add_argument("--train_epochs", "--epochs", type=int, default=100)
     cli.add_argument("--patience", type=int, default=12)
     cli.add_argument("--warmup_epochs", type=int, default=10, help="Early-stop/scheduler grace period; no LR ramp")
@@ -257,6 +259,9 @@ def parser():
     cli.add_argument("--augmentations", default="none")
     cli.add_argument("--patch_len", type=int, default=16)
     cli.add_argument("--stride", type=int, default=8)
+    cli.add_argument("--top_k", type=int, default=3, help="TimesNet dominant periods")
+    cli.add_argument("--num_kernels", type=int, default=6, help="TimesNet Inception kernels")
+    cli.add_argument("--progress", action="store_true", help="Show per-epoch training tqdm progress")
     cli.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     cli.add_argument("--gpu", type=int, default=0, help="Logical CUDA index inside CUDA_VISIBLE_DEVICES")
     cli.add_argument("--smoke", action="store_true")
@@ -265,9 +270,11 @@ def parser():
 
 
 def validate_args(args):
+    if args.vendor_root is None:
+        args.vendor_root = ROOT / "third_party" / ("timesnet" if args.model == "TimesNet" else "medformer")
     if args.batch_size is None:
         args.batch_size = DEFAULT_BATCH[args.dataset]
-    for name in ("batch_size", "train_epochs", "d_model", "d_ff", "e_layers", "n_heads", "patch_len", "stride", "smoke_samples_per_class"):
+    for name in ("batch_size", "train_epochs", "d_model", "d_ff", "e_layers", "n_heads", "patch_len", "stride", "smoke_samples_per_class", "top_k", "num_kernels"):
         if getattr(args, name) <= 0:
             raise ValueError(f"{name} must be positive")
     if args.random_seed < 0 or args.random_seed >= 2 ** 32:
@@ -309,6 +316,8 @@ def run(args):
     if num_classes != len(CLASS_NAMES[args.dataset]):
         raise ValueError("Training classes differ from the fixed dataset task")
     config = model_config(args, int(x_train.shape[2]), int(x_train.shape[1]), num_classes)
+    if args.model == "TimesNet" and args.top_k > config.seq_len // 2:
+        raise ValueError("TimesNet top_k exceeds the number of non-DC rFFT bins")
     model = import_model(args.model, args.vendor_root)(config).float().to(device)
     metadata = source_metadata(args.vendor_root)
     if device.type == "cuda":
@@ -341,7 +350,8 @@ def run(args):
         "scheduler": {"name": "ReduceLROnPlateau", "mode": "max", "factor": 0.5, "patience": 4, "min_lr": 1e-6},
         "warmup_meaning": "Grace period for early stopping and scheduler, not linear LR warmup",
         "test_policy": "No test evaluation in smoke; otherwise exactly once after restoring the best validation checkpoint",
-        "model_scope": "Unmodified Medformer source retrained with this study's fixed protocol; not original-paper scores",
+        "model_scope": ("Unmodified official TimesNet source from thuml/Time-Series-Library" if args.model == "TimesNet"
+                        else "Unmodified Medformer source") + " retrained with this study's fixed protocol; not original-paper scores",
     }
     write_json(args.result_dir / "protocol.json", protocol)
     counts = np.bincount(y_train.numpy(), minlength=num_classes)
@@ -355,7 +365,9 @@ def run(args):
         model.train()
         loss_sum, observations = 0.0, 0
         learning_rate = float(optimizer.param_groups[0]["lr"])
-        for x, y in loaders["train"]:
+        training_batches = tqdm(loaders["train"], disable=not args.progress, mininterval=10,
+                                desc=f"{args.model} {args.dataset} seed={args.random_seed} epoch={epoch}")
+        for x, y in training_batches:
             optimizer.zero_grad(set_to_none=True)
             loss = criterion(forward(model, x, device, num_classes), y.to(device)).mean()
             if not torch.isfinite(loss):

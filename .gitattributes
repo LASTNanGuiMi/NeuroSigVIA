@@ -5,3 +5,6 @@ third_party/medformer/models/** -text -whitespace
 third_party/medformer/layers/** -text -whitespace
 third_party/medformer/utils/** -text -whitespace
 third_party/medformer/LICENSE -text -whitespace
+third_party/timesnet/models/** -text -whitespace
+third_party/timesnet/layers/** -text -whitespace
+third_party/timesnet/LICENSE -text -whitespace

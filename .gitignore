@@ -221,3 +221,5 @@ dataset.zip*
 !/scripts/lib/experiments.sh
 !/third_party/medformer/models/
 !/third_party/medformer/models/*.py
+!/third_party/timesnet/models/
+!/third_party/timesnet/models/*.py

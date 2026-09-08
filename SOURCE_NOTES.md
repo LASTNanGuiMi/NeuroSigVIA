@@ -81,6 +81,18 @@ Their original model names and MIT attribution remain intact; see
 [the license](third_party/medformer/LICENSE) and
 [the file hashes](third_party/medformer/SOURCE_MANIFEST.json).
 
+The seventh baseline, TimesNet, follows the code link from
+[thuml/TimesNet](https://github.com/thuml/TimesNet) to
+[thuml/Time-Series-Library](https://github.com/thuml/Time-Series-Library), pinned
+at commit `4e938a1767106324dd753b2a44832bf870a0252e`. Its model, embedding and
+convolution layers are unmodified copies in `third_party/timesnet/`; see
+[the source notice](third_party/timesnet/NOTICE.md),
+[the MIT license](third_party/timesnet/LICENSE), and
+[the file hashes](third_party/timesnet/SOURCE_MANIFEST.json).
+The adapter calls the official classification head with full-length inputs
+and an all-ones padding mask. Shared training settings match the other
+baselines; `top_k=3` and `num_kernels=6` are the TimesNet-specific choices.
+
 `runners/baselines.py` is the study's own training adapter and uses the maintained
 subject splits, labels, sequence lengths and normalization. Its method
 scripts provide a shared initial configuration; these settings and resulting

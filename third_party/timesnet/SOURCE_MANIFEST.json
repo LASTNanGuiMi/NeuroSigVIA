@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/thuml/Time-Series-Library",
+  "source_entrypoint": "https://github.com/thuml/TimesNet",
+  "upstream_commit": "4e938a1767106324dd753b2a44832bf870a0252e",
+  "retrieved_utc": "2026-09-08",
+  "license": "MIT",
+  "upstream_files_unmodified": true,
+  "files": [
+    {
+      "path": "models/TimesNet.py",
+      "source_url": "https://raw.githubusercontent.com/thuml/Time-Series-Library/4e938a1767106324dd753b2a44832bf870a0252e/models/TimesNet.py",
+      "bytes": 8735,
+      "sha256": "f64c4bed1fd7347090044a0163bd4209c9f9ec1c1b19ceff47842df36b64bba7"
+    },
+    {
+      "path": "layers/Embed.py",
+      "source_url": "https://raw.githubusercontent.com/thuml/Time-Series-Library/4e938a1767106324dd753b2a44832bf870a0252e/layers/Embed.py",
+      "bytes": 7012,
+      "sha256": "17e7c3577324c41a0da427a199c955b782fde905aabb1f7cbc3c4e15ebd4ae35"
+    },
+    {
+      "path": "layers/Conv_Blocks.py",
+      "source_url": "https://raw.githubusercontent.com/thuml/Time-Series-Library/4e938a1767106324dd753b2a44832bf870a0252e/layers/Conv_Blocks.py",
+      "bytes": 2376,
+      "sha256": "16d9f2d9e4fa094dc357901e32beecda9839709bcca02625e6447186933ce4e1"
+    },
+    {
+      "path": "LICENSE",
+      "source_url": "https://raw.githubusercontent.com/thuml/Time-Series-Library/4e938a1767106324dd753b2a44832bf870a0252e/LICENSE",
+      "bytes": 1084,
+      "sha256": "8a6caa178ea3f33ebff5d7bb5558628cf5b423305dc30d3630f86564c7db94a2"
+    }
+  ]
+}
