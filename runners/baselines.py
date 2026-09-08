@@ -257,6 +257,7 @@ def parser():
     cli.add_argument("--dropout", type=float, default=0.1)
     cli.add_argument("--patch_len_list", default="2,4,8")
     cli.add_argument("--augmentations", default="none")
+    cli.add_argument("--swa", action="store_true", help="Use epoch-wise stochastic weight averaging (Medformer only)")
     cli.add_argument("--patch_len", type=int, default=16)
     cli.add_argument("--stride", type=int, default=8)
     cli.add_argument("--top_k", type=int, default=3, help="TimesNet dominant periods")
@@ -290,6 +291,8 @@ def validate_args(args):
             raise ValueError(f"{name} must be finite and non-negative")
     if args.learning_rate < 1e-6:
         raise ValueError("learning_rate must be at least the scheduler minimum 1e-6")
+    if args.swa and args.model != "Medformer":
+        raise ValueError("--swa is supported only for the Medformer configuration")
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable; use --device cpu explicitly for a CPU smoke run")
 
@@ -319,6 +322,7 @@ def run(args):
     if args.model == "TimesNet" and args.top_k > config.seq_len // 2:
         raise ValueError("TimesNet top_k exceeds the number of non-DC rFFT bins")
     model = import_model(args.model, args.vendor_root)(config).float().to(device)
+    averaged_model = torch.optim.swa_utils.AveragedModel(model) if args.swa else None
     metadata = source_metadata(args.vendor_root)
     if device.type == "cuda":
         properties = torch.cuda.get_device_properties(device)
@@ -348,6 +352,12 @@ def run(args):
         "train_epochs": 1 if args.smoke else args.train_epochs, "batch_size": args.batch_size,
         "early_stopping": {"strategy": "raw_primary", "patience": args.patience, "warmup_epochs": args.warmup_epochs, "min_delta": args.min_delta},
         "scheduler": {"name": "ReduceLROnPlateau", "mode": "max", "factor": 0.5, "patience": 4, "min_lr": 1e-6},
+        "stochastic_weight_averaging": {
+            "enabled": args.swa,
+            "start_epoch": 1 if args.swa else None,
+            "update": "equal-weight parameter average after every completed epoch" if args.swa else None,
+            "batch_norm_update": False,
+        },
         "warmup_meaning": "Grace period for early stopping and scheduler, not linear LR warmup",
         "test_policy": "No test evaluation in smoke; otherwise exactly once after restoring the best validation checkpoint",
         "model_scope": ("Unmodified official TimesNet source from thuml/Time-Series-Library" if args.model == "TimesNet"
@@ -376,14 +386,20 @@ def run(args):
             optimizer.step()
             loss_sum += float(loss.detach()) * len(y)
             observations += len(y)
-        validation, _ = evaluate(model, loaders["vali"], subject_ids["vali"], device, num_classes)
+        if averaged_model is not None:
+            averaged_model.update_parameters(model)
+        selection_model = averaged_model if averaged_model is not None else model
+        validation, _ = evaluate(selection_model, loaders["vali"], subject_ids["vali"], device, num_classes)
         key = (validation["subject_macro_f1"], -validation["subject_macro_log_loss"])
         improved = best_key is None or key > best_key
         if improved:
             best_key, best_epoch = key, epoch
-            checkpoint = {"model_state_dict": {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()},
+            checkpoint_model = selection_model.module if averaged_model is not None else selection_model
+            checkpoint = {"model_state_dict": {name: tensor.detach().cpu() for name, tensor in checkpoint_model.state_dict().items()},
                           "epoch": epoch, "selection_key": key, "config": vars(config),
                           "random_seed": args.random_seed, "split_seed": 42, "smoke": args.smoke,
+                          "swa": args.swa,
+                          "swa_n_averaged": (int(averaged_model.n_averaged.item()) if averaged_model is not None else 0),
                           "fixed_model_indices_outside_state_dict": fixed_model_indices(model)}
             temporary = args.result_dir / "best_checkpoint.tmp.pt"
             torch.save(checkpoint, temporary)
@@ -414,6 +430,7 @@ def run(args):
              "split_seed": 42, "smoke": args.smoke, "scientific_result": not args.smoke,
              "best_epoch": best_epoch, "epochs_run": len(history), "validation": final_validation,
              "test": final_test, "test_evaluation_count": 0 if args.smoke else 1,
+             "swa": args.swa, "swa_n_averaged": checkpoint.get("swa_n_averaged", 0),
              "elapsed_seconds": time.monotonic() - started}
     write_json(args.result_dir / "metrics.json", final)
     write_json(args.result_dir / "status.json", final)

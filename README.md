@@ -237,12 +237,24 @@ inputs from `[B,C,T]` to `[B,T,C]`, supplies an all-ones padding mask, and uses
 the official classification head. Window probabilities are averaged per
 subject before computing the six subject-level metrics.
 
-Shared baseline settings are split seed 42, `d_model=128`, `d_ff=256`, two
-layers, dropout 0.1, AdamW learning rate `3e-4`, weight decay `1e-3`, at most
-100 epochs, and early stopping with warmup 10, patience 12 and `min_delta=0.002`.
-TimesNet uses `top_k=3` and `num_kernels=6`; the shared `n_heads=8` is unused by
-its convolution architecture. See [TimesNet integration](third_party/timesnet/INTEGRATION.md)
-for verification and interpreter examples.
+TimesNet deliberately keeps its existing integration configuration: split seed
+42, `d_model=128`, `d_ff=256`, two layers, dropout 0.1, AdamW learning rate
+`3e-4`, weight decay `1e-3`, at most 100 epochs, and early stopping with warmup
+10, patience 12 and `min_delta=0.002`. It uses `top_k=3` and `num_kernels=6`;
+`n_heads=8` is accepted but unused by its convolution architecture. See
+[TimesNet integration](third_party/timesnet/INTEGRATION.md) for verification and
+interpreter examples.
+
+The other six baseline launchers follow the effective configurations selected
+by Medformer's `scripts/classification` at pinned source commit `446275f`:
+`d_model=128`, `d_ff=256`, six encoder layers, learning rate `1e-4`, at most 100
+epochs and patience 10, plus the upstream defaults of eight heads and dropout
+0.1. For the overlapping subject-independent datasets, the official batch
+sizes are ADFTD/TDBRAIN/APAVA = 128/32/32. Medformer additionally uses the
+upstream dataset-specific patch lists, augmentations and epoch-wise SWA. The
+upstream directory has no Shimmer10 or PADS11 entries, so those two retain local
+batch sizes 1/4 and the Medformer fallback `2,4,8` plus no augmentation; these
+fallback values are not claimed as upstream settings.
 
 The other method scripts default to GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
@@ -275,13 +287,15 @@ free, with status `WAITING_FOR_GPU`.
 
 Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, edit `DATASETS` and `SEEDS` in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
-The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. Defaults are 100 epochs with existing early stopping (warmup 10, patience 12) and batch sizes 8/8/8/1/4. Both trainers select on validation subject Macro-F1. Baselines use AdamW, balanced cross entropy, mean subject probabilities and one final test evaluation after restoring the best checkpoint. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
+The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself keeps batch sizes 8/8/8/1/4 and its existing early stopping; the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter still uses AdamW, balanced cross entropy, ReduceLROnPlateau, validation subject Macro-F1 selection, mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
-The seven baseline scripts supply a shared starting configuration, not
-original-paper tuned settings or completed benchmark results. Keep
-hyperparameter changes in the corresponding method script so the same
-`bash scripts/<Method>.sh` command reproduces its saved configuration. The
-batch scheduler derives output paths from the method, dataset, seed and run tag.
+The six Medformer-family scripts transfer the upstream classification-shell
+settings into NeuroSigVIA's fixed data and evaluation protocol; this is not a
+copy of the upstream training loop and not a claim about published scores.
+TimesNet remains a separately sourced configuration. Keep hyperparameter changes
+in the corresponding method script so the same `bash scripts/<Method>.sh`
+command reproduces its saved configuration. The batch scheduler derives output
+paths from the method, dataset, seed and run tag.
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,

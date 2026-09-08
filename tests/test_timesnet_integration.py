@@ -4,7 +4,9 @@ import io
 from pathlib import Path
 import re
 import sys
+from types import ModuleType
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -13,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from runners import baselines as baseline
 
 
-SHARED_SETTINGS = {
+TIMESNET_SETTINGS = {
     "split_seed": 42,
     "d_model": 128,
     "d_ff": 256,
@@ -26,6 +28,16 @@ SHARED_SETTINGS = {
     "patience": 12,
     "warmup_epochs": 10,
     "min_delta": 0.002,
+}
+MEDFORMER_EFFECTIVE_SETTINGS = {
+    "d_model": 128,
+    "d_ff": 256,
+    "e_layers": 6,
+    "n_heads": 8,
+    "dropout": 0.1,
+    "learning_rate": 1e-4,
+    "train_epochs": 100,
+    "patience": 10,
 }
 OLD_MODELS = (
     "Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer",
@@ -81,24 +93,21 @@ class TimesNetProtocolTests(unittest.TestCase):
         explicit = arguments("TimesNet", "apava", "--vendor_root", "explicit-vendor")
         self.assertEqual(explicit.vendor_root, Path("explicit-vendor"))
 
-    def test_common_training_defaults_and_dataset_batch_sizes(self):
+    def test_parser_defaults_remain_timesnet_compatible(self):
         batches = {"adftd": 8, "tdbrain": 8, "apava": 8, "shimmer10": 1, "pads11": 4}
         for dataset, batch_size in batches.items():
             with self.subTest(dataset=dataset):
                 timesnet = arguments("TimesNet", dataset)
-                autoformer = arguments("Autoformer", dataset)
                 self.assertEqual(timesnet.batch_size, batch_size)
-                self.assertEqual(autoformer.batch_size, batch_size)
-                for name, expected in SHARED_SETTINGS.items():
+                for name, expected in TIMESNET_SETTINGS.items():
                     self.assertEqual(getattr(timesnet, name), expected, name)
-                    self.assertEqual(getattr(timesnet, name), getattr(autoformer, name), name)
                 self.assertEqual(timesnet.random_seed, 42)
                 self.assertEqual(timesnet.top_k, 3)
                 self.assertEqual(timesnet.num_kernels, 6)
 
-    def test_launcher_uses_four_datasets_three_seeds_and_shared_settings(self):
+    def test_launcher_uses_four_datasets_three_seeds_and_unchanged_settings(self):
         script = (ROOT / "scripts" / "TimesNet.sh").read_text(encoding="utf-8")
-        for name, expected in SHARED_SETTINGS.items():
+        for name, expected in TIMESNET_SETTINGS.items():
             self.assertEqual(script_numeric_setting(script, name), expected, name)
         self.assertEqual(script_numeric_setting(script, "top_k"), 3)
         self.assertEqual(script_numeric_setting(script, "num_kernels"), 6)
@@ -115,13 +124,41 @@ class TimesNetProtocolTests(unittest.TestCase):
             self.assertIsNotNone(match, dataset)
             self.assertEqual(int(match.group(1)), expected, dataset)
         self.assertIn("--progress", script)
-        # The source-staging directory contains changed files only. On the full
-        # checkout this also guards against drift from the existing launcher.
-        autoformer = ROOT / "scripts" / "Autoformer.sh"
-        if autoformer.is_file():
-            reference = autoformer.read_text(encoding="utf-8")
-            for name in SHARED_SETTINGS:
-                self.assertEqual(script_numeric_setting(script, name), script_numeric_setting(reference, name), name)
+
+    def test_six_medformer_family_launchers_follow_upstream_effective_settings(self):
+        for model in OLD_MODELS:
+            with self.subTest(model=model):
+                script = (ROOT / "scripts" / f"{model}.sh").read_text(encoding="utf-8")
+                for name, expected in MEDFORMER_EFFECTIVE_SETTINGS.items():
+                    self.assertEqual(script_numeric_setting(script, name), expected, name)
+                for dataset, expected in (
+                    ("adftd", 128), ("tdbrain", 32), ("apava", 32),
+                    ("shimmer10", 1), ("pads11", 4),
+                ):
+                    match = re.search(r"\[" + dataset + r"\]=(\d+)", script)
+                    self.assertIsNotNone(match, dataset)
+                    self.assertEqual(int(match.group(1)), expected, dataset)
+
+        medformer = (ROOT / "scripts" / "Medformer.sh").read_text(encoding="utf-8")
+        for expected in (
+            'patch_len_list="2,4,8,8,16,16,16,16,32,32,32,32,32,32,32,32"',
+            'augmentations="drop0.5"',
+            'patch_len_list="8,8,8,16,16,16"',
+            'augmentations="none,drop0.25"',
+            'patch_len_list="2,2,2,4,4,4,16,16,16,16,32,32,32,32,32"',
+            'augmentations="none,drop0.35"',
+            '--patch_len_list "$patch_len_list" --augmentations "$augmentations" --swa',
+        ):
+            self.assertIn(expected, medformer)
+        for model in OLD_MODELS:
+            script = (ROOT / "scripts" / f"{model}.sh").read_text(encoding="utf-8")
+            self.assertEqual("--swa" in script, model == "Medformer", model)
+
+    def test_swa_is_medformer_only_and_opt_in(self):
+        self.assertFalse(arguments("Medformer").swa)
+        self.assertTrue(arguments("Medformer", "apava", "--swa").swa)
+        with self.assertRaisesRegex(ValueError, "Medformer"):
+            arguments("TimesNet", "apava", "--swa")
 
 
 class TimesNetModelTests(unittest.TestCase):
@@ -180,6 +217,44 @@ class TimesNetModelTests(unittest.TestCase):
                 with torch.no_grad():
                     actual = baseline.forward(restored, x, torch.device("cpu"), 2)
                 torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        finally:
+            torch.set_num_threads(previous_threads)
+
+
+class MedformerModelConfigTests(unittest.TestCase):
+    def test_upstream_eeg_patch_and_augmentation_configs_construct_and_restore(self):
+        cases = {
+            "adftd": ("2,4,8,8,16,16,16,16,32,32,32,32,32,32,32,32", "drop0.5"),
+            "tdbrain": ("8,8,8,16,16,16", "none,drop0.25"),
+            "apava": ("2,2,2,4,4,4,16,16,16,16,32,32,32,32,32", "none,drop0.35"),
+        }
+        previous_threads = torch.get_num_threads()
+        torch.set_num_threads(1)
+        reformer_stub = ModuleType("reformer_pytorch")
+        reformer_stub.LSHSelfAttention = torch.nn.Identity
+        try:
+            with patch.dict(sys.modules, {"reformer_pytorch": reformer_stub}), \
+                 isolated_vendor_imports(), torch.random.fork_rng(devices=[]):
+                model_class = baseline.import_model("Medformer", ROOT / "third_party" / "medformer")
+                x = torch.randn(2, 3, 64)
+                for dataset, (patch_lengths, augmentations) in cases.items():
+                    with self.subTest(dataset=dataset):
+                        args = arguments(
+                            "Medformer", dataset, "--d_model", "8", "--d_ff", "16",
+                            "--e_layers", "1", "--n_heads", "2", "--patch_len_list", patch_lengths,
+                            "--augmentations", augmentations, "--swa",
+                        )
+                        config = baseline.model_config(args, sequence_length=64, channels=3, num_classes=2)
+                        model = model_class(config).float().eval()
+                        with torch.no_grad():
+                            expected = baseline.forward(model, x, torch.device("cpu"), 2)
+                        averaged = torch.optim.swa_utils.AveragedModel(model)
+                        averaged.update_parameters(model)
+                        restored = model_class(config).float().eval()
+                        restored.load_state_dict(averaged.module.state_dict(), strict=True)
+                        with torch.no_grad():
+                            actual = baseline.forward(restored, x, torch.device("cpu"), 2)
+                        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         finally:
             torch.set_num_threads(previous_threads)
 

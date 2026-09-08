@@ -14,10 +14,10 @@ It applies softmax to the returned logits and averages window probabilities per
 subject for Accuracy, Macro-Precision, Macro-Recall, Macro-F1, Macro-AUROC and
 Macro-AUPRC. The other six baselines continue to use `third_party/medformer/`.
 
-Training uses the same NeuroSigVIA baseline protocol: subject split seed 42,
+TimesNet retains its original NeuroSigVIA integration protocol: subject split seed 42,
 initialization seeds 42/43/44, AdamW (learning rate 0.0003, weight decay 0.001),
 d_model 128, d_ff 256, two layers, dropout 0.1, at most 100 epochs, early-stop
-warmup 10, patience 12 and min_delta 0.002. The common n_heads=8 is accepted but
+warmup 10, patience 12 and min_delta 0.002. Its n_heads=8 setting is accepted but
 unused by the TimesNet convolution architecture. Model-specific settings are
 top_k=3 and num_kernels=6. Validation subject Macro-F1 selects checkpoints; subject
 log loss breaks ties. Test is evaluated once after checkpoint restoration.

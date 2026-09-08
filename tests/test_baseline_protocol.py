@@ -1,6 +1,7 @@
 """Small protocol checks; run with python -m unittest discover -s tests."""
 import contextlib
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -78,35 +79,51 @@ class ProtocolTests(unittest.TestCase):
 
     def test_final_test_once_and_smoke_never_evaluates_test(self):
         for smoke in (False, True):
-            with self.subTest(smoke=smoke), tempfile.TemporaryDirectory() as directory:
-                args = baseline.parser().parse_args([
-                    "--model", "Transformer", "--dataset", "apava", "--device", "cpu",
-                    "--result_dir", directory, "--train_epochs", "2", "--warmup_epochs", "0",
-                    "--batch_size", "2"] + (["--smoke"] if smoke else []))
-                baseline.validate_args(args)
-                common = ModuleType("data_loading.experiment")
-                common.load_data = lambda key, smoke=False: (bundle(), {"subject_overlap": [0, 0, 0]})
-                datautils = ModuleType("src.datautils")
-                def write_audit(_bundle, path):
-                    target = Path(path) / "split.csv"
-                    target.write_text("subject,split\n1,train\n11,vali\n21,test\n", encoding="utf-8")
-                    return target
-                datautils.write_eeg_medformer_split_audit = write_audit
-                datautils.write_wearable_split_audit = write_audit
-                seen_test = []
-                real_evaluate = baseline.evaluate
-                def counting_evaluate(model, loader, ids, device, num_classes):
-                    if np.min(ids) >= 21:
-                        seen_test.append(True)
-                    return real_evaluate(model, loader, ids, device, num_classes)
-                with replace_modules({"data_loading.experiment": common, "src.datautils": datautils}), \
-                     patch.object(baseline, "import_model", return_value=TinyModel), \
-                     patch.object(baseline, "source_metadata", return_value={}), \
-                     patch.object(baseline, "evaluate", side_effect=counting_evaluate), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    baseline.run(args)
-                self.assertEqual(len(seen_test), 0 if smoke else 1)
-                self.assertEqual((Path(directory) / "test_predictions.npz").exists(), not smoke)
+            for use_swa in (False, True):
+                with self.subTest(smoke=smoke, swa=use_swa), tempfile.TemporaryDirectory() as directory:
+                    model_name = "Medformer" if use_swa else "Transformer"
+                    extra = ["--swa"] if use_swa else []
+                    args = baseline.parser().parse_args([
+                        "--model", model_name, "--dataset", "apava", "--device", "cpu",
+                        "--result_dir", directory, "--train_epochs", "2", "--warmup_epochs", "0",
+                        "--batch_size", "2", *extra] + (["--smoke"] if smoke else []))
+                    baseline.validate_args(args)
+                    common = ModuleType("data_loading.experiment")
+                    common.load_data = lambda key, smoke=False: (bundle(), {"subject_overlap": [0, 0, 0]})
+                    datautils = ModuleType("src.datautils")
+                    def write_audit(_bundle, path):
+                        target = Path(path) / "split.csv"
+                        target.write_text("subject,split\n1,train\n11,vali\n21,test\n", encoding="utf-8")
+                        return target
+                    datautils.write_eeg_medformer_split_audit = write_audit
+                    datautils.write_wearable_split_audit = write_audit
+                    seen_test = []
+                    real_evaluate = baseline.evaluate
+                    def counting_evaluate(model, loader, ids, device, num_classes):
+                        if np.min(ids) >= 21:
+                            seen_test.append(True)
+                        return real_evaluate(model, loader, ids, device, num_classes)
+                    with replace_modules({"data_loading.experiment": common, "src.datautils": datautils}), \
+                         patch.object(baseline, "import_model", return_value=TinyModel), \
+                         patch.object(baseline, "source_metadata", return_value={}), \
+                         patch.object(baseline, "evaluate", side_effect=counting_evaluate), \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        baseline.run(args)
+                    self.assertEqual(len(seen_test), 0 if smoke else 1)
+                    self.assertEqual((Path(directory) / "test_predictions.npz").exists(), not smoke)
+                    checkpoint = torch.load(Path(directory) / "best_checkpoint.pt", map_location="cpu", weights_only=True)
+                    self.assertEqual(checkpoint["swa"], use_swa)
+                    self.assertFalse(any(name.startswith("module.") for name in checkpoint["model_state_dict"]))
+                    self.assertEqual(checkpoint["swa_n_averaged"], checkpoint["epoch"] if use_swa else 0)
+                    protocol = json.loads((Path(directory) / "protocol.json").read_text(encoding="utf-8"))
+                    self.assertEqual(protocol["stochastic_weight_averaging"]["enabled"], use_swa)
+                    restored = TinyModel(SimpleNamespace(enc_in=2, num_class=2)).eval()
+                    restored.load_state_dict(checkpoint["model_state_dict"], strict=True)
+                    source = bundle()
+                    loaders, subject_ids, _ = baseline.build_loaders(source, 2, 42)
+                    _, expected = baseline.evaluate(restored, loaders["vali"], subject_ids["vali"], torch.device("cpu"), 2)
+                    with np.load(Path(directory) / "validation_predictions.npz") as saved:
+                        np.testing.assert_allclose(expected["y_score"], saved["y_score"], rtol=0, atol=0)
 
 
 if __name__ == "__main__":

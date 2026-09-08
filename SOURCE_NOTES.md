@@ -90,14 +90,16 @@ convolution layers are unmodified copies in `third_party/timesnet/`; see
 [the MIT license](third_party/timesnet/LICENSE), and
 [the file hashes](third_party/timesnet/SOURCE_MANIFEST.json).
 The adapter calls the official classification head with full-length inputs
-and an all-ones padding mask. Shared training settings match the other
-baselines; `top_k=3` and `num_kernels=6` are the TimesNet-specific choices.
+and an all-ones padding mask. TimesNet retains its separate integration
+configuration; `top_k=3` and `num_kernels=6` are the TimesNet-specific choices.
 
 `runners/baselines.py` is the study's own training adapter and uses the maintained
-subject splits, labels, sequence lengths and normalization. Its method
-scripts provide a shared initial configuration; these settings and resulting
-runs must not be presented as original-paper tuned configurations or
-published baseline scores.
+subject splits, labels, sequence lengths and normalization. The six
+Medformer-family scripts reproduce the effective upstream classification
+settings for the three overlapping subject-independent EEG datasets. Shimmer10 and PADS11
+have no matching upstream entries and keep documented local fallbacks. These
+settings run inside the study adapter and must not be presented as the complete
+upstream training pipeline or as published baseline scores.
 
 ## Frozen encoders and datasets
 
