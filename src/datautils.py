@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import sys
@@ -273,6 +274,7 @@ class EEGMedformerBundle:
     test_loader: DataLoader
     test_labels: np.ndarray
     normalization: str = EEG_MEDFORMER_NORMALIZATION
+    subject_subset_manifest: dict | None = None
 
 
 @dataclass
@@ -1460,7 +1462,7 @@ def _normalize_eeg_medformer_windows(windows):
     return normalized
 
 
-def _make_eeg_medformer_split_loader(inventory, split, batch_size):
+def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subject_ids=None):
     spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
     record_by_id = {record.subject_id: record for record in inventory.records}
     subject_ids = inventory.split_ids[split]
@@ -1471,6 +1473,12 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size):
             f"{inventory.dataset_name} {split} window count mismatch: "
             f"{total_windows}; expected {expected_windows}."
         )
+
+    if selected_subject_ids is not None:
+        if not set(selected_subject_ids).issubset(subject_ids) or len(selected_subject_ids) != len(set(selected_subject_ids)):
+            raise ValueError("Subject subset changes source split or repeats subjects")
+        subject_ids = tuple(selected_subject_ids)
+        total_windows = sum(record_by_id[value].window_count for value in subject_ids)
 
     inputs = np.empty(
         (total_windows, spec["channels"], 256), dtype=np.float32
@@ -1505,7 +1513,7 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size):
     return loader, labels
 
 
-def get_eeg_medformer_dataloaders(dataset_name, args):
+def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None):
     protocol = getattr(args, "eeg_protocol", "medformer_code_exact")
     if protocol != "medformer_code_exact":
         raise ValueError(f"Unsupported Medformer EEG protocol: {protocol}")
@@ -1518,14 +1526,18 @@ def get_eeg_medformer_dataloaders(dataset_name, args):
     inventory = get_eeg_medformer_inventory(
         args.data_dir, dataset_name, verify_content=True
     )
+    from src.eeg_subject_subset import build_subject_subset, subject_subset_metadata
+    subset_manifest, selected = build_subject_subset(inventory, subject_subset_config)
+    if subset_manifest is not None:
+        args.adftd_subject_subset = subject_subset_metadata(subset_manifest)
     train_loader, train_labels = _make_eeg_medformer_split_loader(
-        inventory, "train", args.batch_size
+        inventory, "train", args.batch_size, None if selected is None else selected["train"]
     )
     vali_loader, vali_labels = _make_eeg_medformer_split_loader(
-        inventory, "vali", args.batch_size
+        inventory, "vali", args.batch_size, None if selected is None else selected["vali"]
     )
     test_loader, test_labels = _make_eeg_medformer_split_loader(
-        inventory, "test", args.batch_size
+        inventory, "test", args.batch_size, None if selected is None else selected["test"]
     )
     bundle = EEGMedformerBundle(
         inventory=inventory,
@@ -1535,6 +1547,7 @@ def get_eeg_medformer_dataloaders(dataset_name, args):
         vali_labels=vali_labels,
         test_loader=test_loader,
         test_labels=test_labels,
+        subject_subset_manifest=subset_manifest,
     )
 
     distributions = []
@@ -1564,6 +1577,15 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
     inventory = bundle.inventory
     output_path = split_dir / f"{inventory.dataset_name}_subject_split.csv"
     spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
+    subset = bundle.subject_subset_manifest
+    selected_ids = set()
+    if subset is not None:
+        subset_path = Path(result_dir) / f"{inventory.dataset_name}_subject_subset_manifest.json"
+        subset_path.write_text(json.dumps(subset, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        from src.eeg_subject_subset import subject_subset_metadata
+        protocol_path = Path(result_dir) / f"{inventory.dataset_name}_subject_subset_protocol.json"
+        protocol_path.write_text(json.dumps(subject_subset_metadata(subset), indent=2, allow_nan=False) + "\n", encoding="utf-8")
+        selected_ids = {sid for values in subset["splits"].values() for sid in values["selected_subject_ids"]}
     split_by_id = {}
     for split, subject_ids in inventory.split_ids.items():
         for subject_id in subject_ids:
@@ -1584,7 +1606,10 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
                 "split",
                 "label_sha256",
                 "aggregate_content_sha256",
-            ]
+            ] + ([] if subset is None else [
+                "source_split", "source_window_count", "selected_subject",
+                "subset_selection_unit", "subset_selection_seed", "subset_manifest_sha256",
+            ])
         )
         for record in inventory.records:
             writer.writerow(
@@ -1596,11 +1621,15 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
                     record.subject_id,
                     record.label,
                     spec["class_names"][record.label],
-                    record.window_count,
-                    split_by_id.get(record.subject_id, "excluded"),
+                    record.window_count if subset is None or record.subject_id in selected_ids else 0,
+                    split_by_id.get(record.subject_id, "excluded") if subset is None or record.subject_id in selected_ids else "excluded_subject_subset",
                     inventory.label_sha256,
                     inventory.content_sha256,
-                ]
+                ] + ([] if subset is None else [
+                    split_by_id.get(record.subject_id, "excluded"), record.window_count,
+                    int(record.subject_id in selected_ids), "subject",
+                    subset["selection_seed"], subset["manifest_sha256"],
+                ])
             )
     return output_path
 

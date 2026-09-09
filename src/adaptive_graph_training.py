@@ -1273,6 +1273,41 @@ def _atomic_json_dump(path, payload) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _evaluation_protocol(checkpoint_metric_effective):
+    if checkpoint_metric_effective not in {"window_macro_f1", "subject_macro_f1"}:
+        raise ValueError(f"Unknown checkpoint metric: {checkpoint_metric_effective}")
+    return {
+        "evaluation_unit": "window",
+        "supplementary_evaluation_unit": "subject",
+        "checkpoint_metric_effective": checkpoint_metric_effective,
+        "checkpoint_tie_break": (
+            "earliest epoch on equal validation window macro_f1"
+            if checkpoint_metric_effective == "window_macro_f1"
+            else "minimum validation subject_macro_log_loss, then earliest epoch"
+        ),
+        "metric_key_convention": (
+            "Unprefixed metrics score original input examples/windows, not internal "
+            "64-point patches; subject_* metrics are supplementary probability-mean scores"
+        ),
+        "test_policy": "Evaluate test once after validation-only checkpoint selection",
+    }
+
+
+def _atomic_prediction_dump(path, details):
+    """Persist raw predictions for independent window/subject metric checks."""
+    path = Path(path)
+    arrays = {key: np.asarray(value) for key, value in details.items()}
+    if any(array.dtype.hasobject for array in arrays.values()):
+        raise ValueError("Prediction artifacts must not contain pickle/object arrays")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp.npz")
+    try:
+        np.savez_compressed(temporary, **arrays)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _save_checkpoint(
     artifact_dir,
     model,
@@ -1310,6 +1345,8 @@ def _save_checkpoint(
         "validation_metrics": _json_safe(validation_metrics),
         "checkpoint_metric_requested": checkpoint_metric_requested,
         "checkpoint_metric_effective": checkpoint_metric_effective,
+        "evaluation_unit": "window",
+        "supplementary_evaluation_unit": "subject",
         "validation_subject_ids_sha256": _subject_ids_digest(
             validation_subject_ids
         ),
@@ -1320,6 +1357,7 @@ def _save_checkpoint(
             "keys": list(NEUROSIGVIA_STATIC_KEYS),
         },
         "protocol": {
+            **_evaluation_protocol(checkpoint_metric_effective),
             "outer_patch_size": int(outer_patch_size),
             "outer_patch_stride": int(outer_patch_stride),
             "tail_policy": PATCH_TAIL_POLICY,
@@ -1464,7 +1502,7 @@ def train_neurosigvia_classifier(
     activity_graph_line_width=1.0,
     activity_graph_vertical_margin=0.05,
     selector_balance_weight=0.001,
-    checkpoint_metric="auto",
+    checkpoint_metric="window_macro_f1",
     channel_hidden_dim=64,
     artifact_dir=None,
     cross_attention_ffn_hidden_dim=None,
@@ -1839,6 +1877,7 @@ def train_neurosigvia_classifier(
         next_learning_rate = float(optimizer.param_groups[0]["lr"])
         epoch_record = {
             "epoch": epoch + 1,
+            "checkpoint_metric_effective": checkpoint_metric_effective,
             **statistics,
             "learning_rate": learning_rate,
             "next_learning_rate": next_learning_rate,
@@ -1935,7 +1974,9 @@ def train_neurosigvia_classifier(
             "factor": lr_scheduler_factor,
             "min_lr": lr_scheduler_min_lr,
             "final_lr": float(optimizer.param_groups[0]["lr"]),
+            "monitor": checkpoint_metric_effective,
         }
+        early_stop_configuration["monitor"] = checkpoint_metric_effective
         checkpoint_path = _save_checkpoint(
             artifact_dir,
             model,
@@ -1956,6 +1997,8 @@ def train_neurosigvia_classifier(
             scheduler_configuration=scheduler_configuration,
             external_encoder_contracts=external_encoder_contracts,
         )
+        _atomic_prediction_dump(Path(artifact_dir) / "validation_predictions.npz", val_details)
+        _atomic_prediction_dump(Path(artifact_dir) / "test_predictions.npz", test_details)
         _atomic_json_dump(
             Path(artifact_dir) / "adaptive_graph_summary.json",
             {
@@ -1963,6 +2006,11 @@ def train_neurosigvia_classifier(
                 "architecture": NEUROSIGVIA_ARCHITECTURE,
                 "checkpoint": checkpoint_path.name,
                 "best_epoch": best_epoch,
+                **_evaluation_protocol(checkpoint_metric_effective),
+                "checkpoint_metric_requested": checkpoint_metric,
+                "validation_predictions": "validation_predictions.npz",
+                "test_predictions": "test_predictions.npz",
+                "test_evaluations": 1,
                 "validation_metrics": val_metrics,
                 "test_metrics": test_metrics,
                 "validation_selector_soft_usage": val_details[

@@ -20,12 +20,12 @@ DATASETS={'adftd':('ADFTD','eeg',None,8),'tdbrain':('TDBRAIN','eeg',None,8),
  'apava':('APAVA','eeg',None,8),'shimmer10':('Shimmer_10_session10_AFC','wearable','shimmer_hc_vs_pd',1),
  'pads11':('PADS_11_task08_TouchIndex','wearable','pads_pd_vs_hc',4)}
 
-def load_data(key,smoke=False):
+def load_data(key,smoke=False,eeg_subject_subset=None):
     name,kind,mode,batch=DATASETS[key]
     # Loaders print aggregates normally. Suppress any incidental source notices.
     with contextlib.redirect_stdout(io.StringIO()):
         if kind=='eeg':
-            bundle=get_eeg_medformer_dataloaders(name,SimpleNamespace(data_dir=str(EEG_ROOT),batch_size=batch))
+            bundle=get_eeg_medformer_dataloaders(name,SimpleNamespace(data_dir=str(EEG_ROOT),batch_size=batch),subject_subset_config=eeg_subject_subset)
         else:
             bundle=get_wearable_dataloaders(name,SimpleNamespace(data_dir=str(WEARABLE_ROOT),batch_size=batch,wearable_label_mode=mode))
     if smoke:
@@ -54,4 +54,15 @@ def load_data(key,smoke=False):
     overlap=[len(idsets[0]&idsets[1]),len(idsets[0]&idsets[2]),len(idsets[1]&idsets[2])]
     if any(overlap): raise ValueError('Subject overlap')
     manifest['subject_overlap']=overlap
+    subset=getattr(bundle,'subject_subset_manifest',None)
+    if subset is not None:
+        manifest['subject_subset']={
+            'config':subset['config'], 'manifest_sha256':subset['manifest_sha256'],
+            'version':subset['version'], 'selection_unit':'subject',
+            'external_selection_manifest_file_sha256':subset['external_selection_manifest_file_sha256'],
+            'ordered_split_subject_sha256':subset['ordered_split_subject_sha256'],
+            'window_policy':subset['window_policy'], 'totals':subset['totals'],
+            'selected_subject_ids':{s:v['selected_subject_ids'] for s,v in subset['splits'].items()},
+            'selected_window_counts':{s:v['selected_window_count'] for s,v in subset['splits'].items()},
+        }
     return bundle,manifest

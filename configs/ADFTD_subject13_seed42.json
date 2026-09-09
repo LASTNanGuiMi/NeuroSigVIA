@@ -1,0 +1,585 @@
+{
+  "approved_adjustment": "13 subjects selected to preserve all three classes in train/validation/test with a 7/3/3 subject split.",
+  "approved_subject_fraction": 0.14772727272727273,
+  "class_names": {
+    "0": "healthy",
+    "1": "frontotemporal_dementia",
+    "2": "alzheimers"
+  },
+  "created_utc": "2026-09-08T16:51:25.287812+00:00",
+  "dataset_name": "ADFTD",
+  "eeg_train_fraction": 1.0,
+  "evaluation_unit": "original_256_timepoint_window",
+  "ordered_split_subject_sha256": "0c124cd93e07aa7282de96ca401ce521d70c8cf09b6c5cc7d274bae7ae672a51",
+  "original_nominal_fraction_request": 0.1,
+  "original_split_subject_ids": {
+    "test": [
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      84,
+      85,
+      86,
+      87,
+      88,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36
+    ],
+    "train": [
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21
+    ],
+    "vali": [
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      79,
+      80,
+      81,
+      82,
+      83,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ]
+  },
+  "original_subject_split_preserved": true,
+  "sampler_source_file": "/home/guoyin/NeuroSigViT/main/.aris/fusion_ablation_20260909_r2/source/src/datautils.py",
+  "sampler_source_sha256": "84b9fd2064d718f03ad78b186dbf73d8f9f86e588743a899f667709df792f876",
+  "sampling_unit": "subject",
+  "schema_version": 1,
+  "selected_feature_total_byte_size": 428578432,
+  "selected_subject_count": 13,
+  "selection_hash_algorithm": "sha256(json.dumps([[split,subject_id],...], separators=(comma,colon)).encode(utf-8)); split order train,vali,test; subject order shown below",
+  "selection_name": "ADFTD_subject13_seed42",
+  "shared_across_fusion_modes_and_training_seeds": true,
+  "source_dataset_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD",
+  "source_label_file": {
+    "byte_size": 832,
+    "path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Label/label.npy",
+    "row_format": [
+      "label_id",
+      "subject_id"
+    ],
+    "sha256": "3b0be092cd886c0315c38120f3d244fa16f515e83608f30569e1a0ff508e4922"
+  },
+  "source_protocol": "medformer_code_exact_label_row_order_60_20_20",
+  "source_subject_count": 88,
+  "source_subject_label_mapping": {
+    "1": 2,
+    "10": 2,
+    "11": 2,
+    "12": 2,
+    "13": 2,
+    "14": 2,
+    "15": 2,
+    "16": 2,
+    "17": 2,
+    "18": 2,
+    "19": 2,
+    "2": 2,
+    "20": 2,
+    "21": 2,
+    "22": 2,
+    "23": 2,
+    "24": 2,
+    "25": 2,
+    "26": 2,
+    "27": 2,
+    "28": 2,
+    "29": 2,
+    "3": 2,
+    "30": 2,
+    "31": 2,
+    "32": 2,
+    "33": 2,
+    "34": 2,
+    "35": 2,
+    "36": 2,
+    "37": 0,
+    "38": 0,
+    "39": 0,
+    "4": 2,
+    "40": 0,
+    "41": 0,
+    "42": 0,
+    "43": 0,
+    "44": 0,
+    "45": 0,
+    "46": 0,
+    "47": 0,
+    "48": 0,
+    "49": 0,
+    "5": 2,
+    "50": 0,
+    "51": 0,
+    "52": 0,
+    "53": 0,
+    "54": 0,
+    "55": 0,
+    "56": 0,
+    "57": 0,
+    "58": 0,
+    "59": 0,
+    "6": 2,
+    "60": 0,
+    "61": 0,
+    "62": 0,
+    "63": 0,
+    "64": 0,
+    "65": 0,
+    "66": 1,
+    "67": 1,
+    "68": 1,
+    "69": 1,
+    "7": 2,
+    "70": 1,
+    "71": 1,
+    "72": 1,
+    "73": 1,
+    "74": 1,
+    "75": 1,
+    "76": 1,
+    "77": 1,
+    "78": 1,
+    "79": 1,
+    "8": 2,
+    "80": 1,
+    "81": 1,
+    "82": 1,
+    "83": 1,
+    "84": 1,
+    "85": 1,
+    "86": 1,
+    "87": 1,
+    "88": 1,
+    "9": 2
+  },
+  "splits": {
+    "test": {
+      "class_subject_counts": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "subject_count": 3,
+      "subject_ids": [
+        61,
+        84,
+        31
+      ],
+      "subjects": [
+        {
+          "class_name": "healthy",
+          "feature_byte_size": 31207552,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_61.npy",
+          "feature_relative_path": "Feature/feature_61.npy",
+          "feature_sha256": "52b572966a1890d270b97ff3aace397f5060ebfbfca7f844e9fb98a58ae2fb5a",
+          "feature_shape": [
+            802,
+            256,
+            19
+          ],
+          "label_id": 0,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 802
+          },
+          "subject_id": 61,
+          "window_count": 802,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "frontotemporal_dementia",
+          "feature_byte_size": 25370752,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_84.npy",
+          "feature_relative_path": "Feature/feature_84.npy",
+          "feature_sha256": "ced31e4807147ea65d4f2363219a03df114af3a9396316227ae457c0bf7480e2",
+          "feature_shape": [
+            652,
+            256,
+            19
+          ],
+          "label_id": 1,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 652
+          },
+          "subject_id": 84,
+          "window_count": 652,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "alzheimers",
+          "feature_byte_size": 44748928,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_31.npy",
+          "feature_relative_path": "Feature/feature_31.npy",
+          "feature_sha256": "5c55278ef023403821dbb5e47b47f3dd23716ce6745949faf8153edb0eab0b70",
+          "feature_shape": [
+            1150,
+            256,
+            19
+          ],
+          "label_id": 2,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 1150
+          },
+          "subject_id": 31,
+          "window_count": 1150,
+          "window_policy": "all_source_windows"
+        }
+      ],
+      "window_count": 2604
+    },
+    "train": {
+      "class_subject_counts": {
+        "0": 2,
+        "1": 2,
+        "2": 3
+      },
+      "subject_count": 7,
+      "subject_ids": [
+        38,
+        50,
+        73,
+        77,
+        13,
+        19,
+        20
+      ],
+      "subjects": [
+        {
+          "class_name": "healthy",
+          "feature_byte_size": 34631808,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_38.npy",
+          "feature_relative_path": "Feature/feature_38.npy",
+          "feature_sha256": "e1d9ac6d7b9f9813c4555ff0afab0e73e67415dbc04323ebeef303b154024cec",
+          "feature_shape": [
+            890,
+            256,
+            19
+          ],
+          "label_id": 0,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 890
+          },
+          "subject_id": 38,
+          "window_count": 890,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "healthy",
+          "feature_byte_size": 31752320,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_50.npy",
+          "feature_relative_path": "Feature/feature_50.npy",
+          "feature_sha256": "bc876a07417f6bffec5ca73fb2febe9847c7e753efcccaf4fa757981c1cbbf2d",
+          "feature_shape": [
+            816,
+            256,
+            19
+          ],
+          "label_id": 0,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 816
+          },
+          "subject_id": 50,
+          "window_count": 816,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "frontotemporal_dementia",
+          "feature_byte_size": 33230976,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_73.npy",
+          "feature_relative_path": "Feature/feature_73.npy",
+          "feature_sha256": "d2f5634fa61d903dcc7f07ddbe91fd2fb79223d9d8ee1a346ec8a79b188f1aeb",
+          "feature_shape": [
+            854,
+            256,
+            19
+          ],
+          "label_id": 1,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 854
+          },
+          "subject_id": 73,
+          "window_count": 854,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "frontotemporal_dementia",
+          "feature_byte_size": 27160704,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_77.npy",
+          "feature_relative_path": "Feature/feature_77.npy",
+          "feature_sha256": "fc0ae4041e727c331f65e9d5abd6fe848bfc9d7108474e37170a4802cd028ff4",
+          "feature_shape": [
+            698,
+            256,
+            19
+          ],
+          "label_id": 1,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 698
+          },
+          "subject_id": 77,
+          "window_count": 698,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "alzheimers",
+          "feature_byte_size": 32608384,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_13.npy",
+          "feature_relative_path": "Feature/feature_13.npy",
+          "feature_sha256": "2953949ba4f7b40426a189c17dc4d0a8ff5feda158242123e815146415430114",
+          "feature_shape": [
+            838,
+            256,
+            19
+          ],
+          "label_id": 2,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 838
+          },
+          "subject_id": 13,
+          "window_count": 838,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "alzheimers",
+          "feature_byte_size": 35721344,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_19.npy",
+          "feature_relative_path": "Feature/feature_19.npy",
+          "feature_sha256": "41b696e15b95c055d763b2e35eefa48f475efe8c42e352410c145b3137aee6f6",
+          "feature_shape": [
+            918,
+            256,
+            19
+          ],
+          "label_id": 2,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 918
+          },
+          "subject_id": 19,
+          "window_count": 918,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "alzheimers",
+          "feature_byte_size": 33775744,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_20.npy",
+          "feature_relative_path": "Feature/feature_20.npy",
+          "feature_sha256": "92449dba1b7fbad2bc981c118a4d7497ad5f6f3a6ff6cc7c4e3e8d93bbb4fd2c",
+          "feature_shape": [
+            868,
+            256,
+            19
+          ],
+          "label_id": 2,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 868
+          },
+          "subject_id": 20,
+          "window_count": 868,
+          "window_policy": "all_source_windows"
+        }
+      ],
+      "window_count": 5882
+    },
+    "vali": {
+      "class_subject_counts": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "subject_count": 3,
+      "subject_ids": [
+        57,
+        80,
+        28
+      ],
+      "subjects": [
+        {
+          "class_name": "healthy",
+          "feature_byte_size": 30974080,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_57.npy",
+          "feature_relative_path": "Feature/feature_57.npy",
+          "feature_sha256": "3454ebef40477e7ddc0241f7cecd9ae5eac9f8599f86cf184d4e47bf59ba7583",
+          "feature_shape": [
+            796,
+            256,
+            19
+          ],
+          "label_id": 0,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 796
+          },
+          "subject_id": 57,
+          "window_count": 796,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "frontotemporal_dementia",
+          "feature_byte_size": 35565696,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_80.npy",
+          "feature_relative_path": "Feature/feature_80.npy",
+          "feature_sha256": "fdd7ca48c49e2f9ba968cf917eec49af796af3ac64fd3672088cb76370c56ad4",
+          "feature_shape": [
+            914,
+            256,
+            19
+          ],
+          "label_id": 1,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 914
+          },
+          "subject_id": 80,
+          "window_count": 914,
+          "window_policy": "all_source_windows"
+        },
+        {
+          "class_name": "alzheimers",
+          "feature_byte_size": 31830144,
+          "feature_path": "/home/guoyin/data/neurosigvit_eeg/processed/ADFTD/Feature/feature_28.npy",
+          "feature_relative_path": "Feature/feature_28.npy",
+          "feature_sha256": "4899d60a3cfab06bf1b681dfeb15a6f9c13df1c0c28eed1431eb6d2d74f28599",
+          "feature_shape": [
+            818,
+            256,
+            19
+          ],
+          "label_id": 2,
+          "source_dtype": "float64",
+          "source_window_indices": {
+            "convention": "zero_based_half_open_range",
+            "start": 0,
+            "step": 1,
+            "stop": 818
+          },
+          "subject_id": 28,
+          "window_count": 818,
+          "window_policy": "all_source_windows"
+        }
+      ],
+      "window_count": 2528
+    }
+  },
+  "subset_protocol": "fixed_split_joint_class_stratified_whole_subject_subset_v1",
+  "subset_seed": 42,
+  "training_seed_controls_subset": false,
+  "training_seeds": [
+    42,
+    43,
+    44
+  ],
+  "window_policy": "all_windows_from_selected_subjects_no_window_subsampling"
+}

@@ -236,10 +236,10 @@ def parse_args():
     parser.add_argument(
         "--patch_checkpoint_metric",
         choices=["auto", "subject_macro_f1", "window_macro_f1"],
-        default="auto",
+        default="window_macro_f1",
         help=(
-            "Checkpoint unit. auto selects subject macro-F1 only when validated "
-            "disjoint per-sample subject IDs are available"
+            "Validation selection unit; window macro-F1 is the primary protocol. "
+            "Explicit auto retains the legacy subject-aware selection behavior"
         ),
     )
 

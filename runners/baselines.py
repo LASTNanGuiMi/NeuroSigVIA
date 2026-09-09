@@ -36,6 +36,32 @@ DATASETS = ("adftd", "tdbrain", "apava", "shimmer10", "pads11")
 DEFAULT_BATCH = dict(adftd=8, tdbrain=8, apava=8, shimmer10=1, pads11=4)
 CLASS_NAMES = {"adftd": ["HC", "FTD", "AD"], "tdbrain": ["HC", "PD"],
                "apava": ["HC", "AD"], "shimmer10": ["HC", "PD"], "pads11": ["HC", "PD"]}
+CHECKPOINT_METRICS = ("window_macro_f1", "subject_macro_f1")
+
+
+def checkpoint_selection_key(validation, checkpoint_metric):
+    """Use validation only; equal window F1 keeps the earlier checkpoint."""
+    if checkpoint_metric == "window_macro_f1":
+        return (float(validation["macro_f1"]),)
+    if checkpoint_metric == "subject_macro_f1":
+        return (float(validation["subject_macro_f1"]), -float(validation["subject_macro_log_loss"]))
+    raise ValueError(f"Unsupported checkpoint metric: {checkpoint_metric}")
+
+
+def selection_metadata(checkpoint_metric):
+    if checkpoint_metric not in CHECKPOINT_METRICS:
+        raise ValueError(f"Unsupported checkpoint metric: {checkpoint_metric}")
+    selection_unit = "window" if checkpoint_metric == "window_macro_f1" else "subject"
+    return {
+        "checkpoint_metric": "validation_" + checkpoint_metric,
+        "selection_unit": selection_unit,
+        "checkpoint_tie_break": ("earliest epoch on equal validation window macro_f1"
+                                 if selection_unit == "window"
+                                 else "minimum validation subject_macro_log_loss"),
+        "evaluation_unit": "window",
+        "supplementary_evaluation_unit": "subject",
+        "metric_key_convention": "Unprefixed metrics are window-level; subject_* metrics are supplementary subject-level",
+    }
 
 
 def write_json(path, value):
@@ -247,6 +273,8 @@ def parser():
     cli.add_argument("--patience", type=int, default=12)
     cli.add_argument("--warmup_epochs", type=int, default=10, help="Early-stop/scheduler grace period; no LR ramp")
     cli.add_argument("--min_delta", type=float, default=0.002)
+    cli.add_argument("--checkpoint_metric", choices=CHECKPOINT_METRICS, default="window_macro_f1",
+                     help="Validation selection/early-stop/scheduler metric; window-level is the primary protocol")
     cli.add_argument("--learning_rate", type=float, default=3e-4)
     cli.add_argument("--weight_decay", type=float, default=1e-3)
     cli.add_argument("--batch_size", type=int)
@@ -343,15 +371,16 @@ def run(args):
         "wearable_label_mapping": getattr(bundle, "label_mapping", None),
         "data_manifest": data_manifest, "subject_split_file": str(split_path.relative_to(args.result_dir)),
         "subject_split_sha256": digest_file(split_path), "selected_source_rows": selected_rows,
-        "checkpoint_metric": "validation_subject_macro_f1",
-        "checkpoint_tie_break": "minimum validation subject_macro_log_loss",
+        **selection_metadata(args.checkpoint_metric),
         "subject_aggregation": "arithmetic mean of window probabilities",
         "loss": "mean of sample-wise balanced weighted cross entropy",
         "class_weight_basis": "training window/record frequencies only",
         "optimizer": "AdamW", "learning_rate": args.learning_rate, "weight_decay": args.weight_decay,
         "train_epochs": 1 if args.smoke else args.train_epochs, "batch_size": args.batch_size,
-        "early_stopping": {"strategy": "raw_primary", "patience": args.patience, "warmup_epochs": args.warmup_epochs, "min_delta": args.min_delta},
-        "scheduler": {"name": "ReduceLROnPlateau", "mode": "max", "factor": 0.5, "patience": 4, "min_lr": 1e-6},
+        "early_stopping": {"strategy": "raw_primary", "metric": "validation_" + args.checkpoint_metric,
+                           "patience": args.patience, "warmup_epochs": args.warmup_epochs, "min_delta": args.min_delta},
+        "scheduler": {"name": "ReduceLROnPlateau", "metric": "validation_" + args.checkpoint_metric,
+                      "mode": "max", "factor": 0.5, "patience": 4, "min_lr": 1e-6},
         "stochastic_weight_averaging": {
             "enabled": args.swa,
             "start_epoch": 1 if args.swa else None,
@@ -390,13 +419,14 @@ def run(args):
             averaged_model.update_parameters(model)
         selection_model = averaged_model if averaged_model is not None else model
         validation, _ = evaluate(selection_model, loaders["vali"], subject_ids["vali"], device, num_classes)
-        key = (validation["subject_macro_f1"], -validation["subject_macro_log_loss"])
+        key = checkpoint_selection_key(validation, args.checkpoint_metric)
         improved = best_key is None or key > best_key
         if improved:
             best_key, best_epoch = key, epoch
             checkpoint_model = selection_model.module if averaged_model is not None else selection_model
             checkpoint = {"model_state_dict": {name: tensor.detach().cpu() for name, tensor in checkpoint_model.state_dict().items()},
                           "epoch": epoch, "selection_key": key, "config": vars(config),
+                          **selection_metadata(args.checkpoint_metric),
                           "random_seed": args.random_seed, "split_seed": 42, "smoke": args.smoke,
                           "swa": args.swa,
                           "swa_n_averaged": (int(averaged_model.n_averaged.item()) if averaged_model is not None else 0),
@@ -411,11 +441,13 @@ def run(args):
                 stale_epochs += 1
             scheduler.step(key[0])
         record = {"epoch": epoch, "train_loss": loss_sum / observations, "validation": validation,
+                  **selection_metadata(args.checkpoint_metric), "selection_key": key,
+                  "selection_value": key[0],
                   "learning_rate": learning_rate, "next_learning_rate": float(optimizer.param_groups[0]["lr"]),
                   "checkpoint_improved": improved, "early_stop_epochs_without_improvement": stale_epochs}
         history.append(record)
         write_json(args.result_dir / "history.json", history)
-        print(f"{args.model} {args.dataset} seed={args.random_seed} epoch={epoch} loss={record['train_loss']:.6f} val_subject_f1={key[0]:.6f} lr={learning_rate:.3g}", flush=True)
+        print(f"{args.model} {args.dataset} seed={args.random_seed} epoch={epoch} loss={record['train_loss']:.6f} val_{args.checkpoint_metric}={key[0]:.6f} lr={learning_rate:.3g}", flush=True)
         if args.patience > 0 and epoch > args.warmup_epochs and stale_epochs >= args.patience:
             break
     checkpoint = torch.load(args.result_dir / "best_checkpoint.pt", map_location=device, weights_only=True)
@@ -428,6 +460,7 @@ def run(args):
         np.savez_compressed(args.result_dir / "test_predictions.npz", **test_predictions)
     final = {"status": "COMPLETED", "model": args.model, "dataset": args.dataset, "random_seed": args.random_seed,
              "split_seed": 42, "smoke": args.smoke, "scientific_result": not args.smoke,
+             **selection_metadata(args.checkpoint_metric), "selection_key": list(best_key),
              "best_epoch": best_epoch, "epochs_run": len(history), "validation": final_validation,
              "test": final_test, "test_evaluation_count": 0 if args.smoke else 1,
              "swa": args.swa, "swa_n_averaged": checkpoint.get("swa_n_averaged", 0),
@@ -449,11 +482,13 @@ def main():
     with (args.result_dir / ".run_claim").open("x", encoding="utf-8") as handle:
         handle.write(str(os.getpid()))
     write_json(args.result_dir / "args.json", {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()})
-    write_json(args.result_dir / "status.json", {"status": "RUNNING", "pid": os.getpid(), "smoke": args.smoke})
+    write_json(args.result_dir / "status.json", {"status": "RUNNING", "pid": os.getpid(), "smoke": args.smoke,
+                                               **selection_metadata(args.checkpoint_metric)})
     try:
         run(args)
     except BaseException as error:
-        write_json(args.result_dir / "status.json", {"status": "FAILED", "error_type": type(error).__name__, "error": str(error), "smoke": args.smoke})
+        write_json(args.result_dir / "status.json", {"status": "FAILED", "error_type": type(error).__name__, "error": str(error),
+                                                   "smoke": args.smoke, **selection_metadata(args.checkpoint_metric)})
         (args.result_dir / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
         raise
 

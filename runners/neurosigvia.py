@@ -620,6 +620,8 @@ def build_feature_cache_signature(
         "uci_protocol": args.uci_protocol,
         "split_seed": 42 if has_fixed_split else args.random_seed,
         "split_audit_sha256": split_audit_sha256,
+        **({"adftd_subject_subset": args.adftd_subject_subset}
+           if getattr(args, "adftd_subject_subset", None) is not None else {}),
         "val_ratio": args.val_ratio,
         "custom_test_ratio": args.custom_test_ratio,
         "falltl_target_length": args.falltl_target_length,
@@ -1289,6 +1291,9 @@ if __name__ == "__main__":
             test_loader = eeg_bundle.test_loader
             test_labels = eeg_bundle.test_labels
             audit_path = write_eeg_medformer_split_audit(eeg_bundle, result_dir)
+            if getattr(args, "adftd_subject_subset", None) is not None:
+                with open(f"{result_dir}/args.json", "w") as subset_args_file:
+                    json.dump(vars(args), subset_args_file, indent=4)
             print(f"EEG subject split audit: {audit_path}")
         elif args.datasets == "wearable":
             fixed_validation_split = True
