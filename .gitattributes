@@ -8,3 +8,6 @@ third_party/medformer/LICENSE -text -whitespace
 third_party/timesnet/models/** -text -whitespace
 third_party/timesnet/layers/** -text -whitespace
 third_party/timesnet/LICENSE -text -whitespace
+
+# Preserve the externally verified cohort manifest byte hash.
+configs/ADFTD_subject13_seed42.json -text
