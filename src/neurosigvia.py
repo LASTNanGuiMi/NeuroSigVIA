@@ -293,6 +293,7 @@ def render_stacked_multichannel_lineplot(
 
     if torch.is_tensor(signals):
         signals = signals.detach().to(device="cpu", dtype=torch.float32).numpy()
+    # 静态折线图明确经过 detach/NumPy；输入 [C,L_valid]，不承载在线活动图门控的梯度。
     signals = np.asarray(signals, dtype=np.float32)
     if signals.ndim != 2:
         raise ValueError(f"signals must have shape (n, T), got {signals.shape}.")
@@ -310,6 +311,7 @@ def render_stacked_multichannel_lineplot(
         )
 
     canvas = np.ones((3, img_size, img_size), dtype=np.float32)
+    # 一个内部块只输出 [3,H,H] 图像；C 个通道分别占固定纵向泳道，当前 H=224、TDBRAIN C=33。
     lane_edges = np.linspace(
         0,
         img_size,
@@ -406,6 +408,8 @@ def preprocess_multichannel_lineplot(signals, img_size=224):
 
 def preprocess_stacked_multichannel_lineplot(signals, img_size=224):
     """Render ``(channels, time)`` or ``(batch, channels, time)`` as lanes."""
+    # patch_mindts._line_images_for_chunk 调用：输入 [V,C,L_valid]，返回 [V,3,224,224]。
+    # 若只传 [C,L_valid]，会补 V=1 批轴；这里的 V 表示待编码内部块数。
     device = signals.device if torch.is_tensor(signals) else None
     if torch.is_tensor(signals) and signals.is_floating_point():
         output_dtype = signals.dtype
@@ -682,6 +686,8 @@ class BaseNeuroSigVIA(nn.Module, ABC):
         return torch.stack(candidate_embeddings, dim=1)
 
     def aggregate_hidden_representations(self, hidden_states, aggregation):
+        # 静态 line 路径调用此函数：[V,1+P,Dh] -> [V,Dh] -> [V,Dv]。
+        # 在线活动图不调用此全局聚合，改保留 4*4 空间 token 作为交叉注意力 K/V。
         if aggregation == "mean":
             if hidden_states.ndim != 3 or hidden_states.shape[1] < 2:
                 raise ValueError(
@@ -866,6 +872,9 @@ class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
             ]
 
     def forward_vit(self, inputs):
+        # 主脚本 ViT-H/14、layer_idx=14：RGB [V,3,224,224] -> [V,257,1280]。
+        # _embeds 构造 CLS+16*16 空间 token；truncate_layers 已将 resblocks 截至前 14 层。
+        # 本路径使用张量归一化，未 detach 或 no_grad；冻结权重时仍可对在线图像求导。
         hidden_states = []
 
         inputs = self.processor(inputs)
@@ -887,6 +896,7 @@ class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
         # output projection.  Applying the frozen post norm/projection makes
         # the implementation match NeuroSigVIA Eq. (5), while keeping the
         # selected intermediate transformer depth fixed.
+        # 对最后一维执行 1280 -> 1024 投影：兼容静态 [V,1280] 和在线 [V,16,1280]。
         if hasattr(self.vit, "ln_post"):
             pooled = self.vit.ln_post(pooled)
         projection = getattr(self.vit, "proj", None)

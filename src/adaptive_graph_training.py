@@ -73,6 +73,8 @@ NEUROSIGVIA_ARCHITECTURE = (
 )
 
 NEUROSIGVIA_STATIC_KEYS = (
+    # 维度记号：B=输入分类窗口数，N=每个输入的内部块数，C=通道数，L=内部块长度。
+    # Dv=视觉投影维度，Dt=Mantis 单通道维度；TDBRAIN 的 256 点窗口按 64 点切成 N=4。
     "raw_windows",
     "line_tokens",
     "mantis_channel_tokens",
@@ -447,6 +449,8 @@ def extract_adaptive_graph_feature_batch(
     lengths=None,
 ) -> dict[str, torch.Tensor]:
     """Cache raw windows, pooled line tokens, and channel-wise Mantis tokens."""
+    # 输入 batch=[B,C,T]；当前 TDBRAIN 为 [B,33,256]，这里没有生成新的分类标签。
+    # 本函数的 no_grad 加 CPU 缓存切断静态分支的梯度；动态图门控在后续 forward 中另行计算。
     if encode_batch_size <= 0:
         raise ValueError("encode_batch_size must be positive")
     if vision_model is None or mantis_model is None:
@@ -463,6 +467,7 @@ def extract_adaptive_graph_feature_batch(
         lengths=lengths,
     )
     batch_size, patch_count, channels, patch_length = temporal.patches.shape
+    # make_temporal_patches 返回 [B,N,C,L]；TDBRAIN 默认 [B,4,33,64]。
     flat_windows = temporal.patches.reshape(
         batch_size * patch_count,
         channels,
@@ -476,6 +481,7 @@ def extract_adaptive_graph_feature_batch(
     valid_windows = flat_windows.index_select(0, valid_indices)
     valid_lengths = flat_lengths.index_select(0, valid_indices)
 
+    # 只编码 V 个有效内部块：valid_windows=[V,C,L]，valid_lengths=[V]，V<=B*N。
     line_valid = _extract_line_tokens(
         valid_windows,
         valid_lengths,
@@ -491,6 +497,7 @@ def extract_adaptive_graph_feature_batch(
         encode_batch_size,
     )
     total_patches = batch_size * patch_count
+    # line_valid=[V,Dv]，mantis_valid=[V,C,Dt]；无效块补零后恢复 B、N 两轴。
     line = torch.zeros(
         (total_patches, line_valid.shape[-1]), dtype=torch.float32
     )
@@ -507,6 +514,8 @@ def extract_adaptive_graph_feature_batch(
     bundle = {
         # Raw windows remain float32 because the trainable renderer consumes
         # them online; the two frozen representations use compact float16.
+        # 缓存契约：raw=[B,N,C,L] float32；line=[B,N,Dv]、mantis=[B,N,C,Dt] float16。
+        # mask=[B,N] bool，fraction=[B,N] 为有效长度/L，lengths=[B,N] 为有效采样点数。
         "raw_windows": flat_windows.reshape(
             batch_size,
             patch_count,
@@ -543,6 +552,7 @@ def _extract_static_split(
     encode_batch_size: int,
     expected_channels: int,
 ) -> dict[str, torch.Tensor]:
+    # 每批仅替换 B 轴；拼接后首轴为整个 split 的输入窗口数 M，内部块数 N 始终保留。
     if not isinstance(loader.sampler, SequentialSampler):
         raise ValueError(
             "static feature extraction requires a sequential source loader; "
@@ -797,6 +807,8 @@ class NeuroSigVIAClassifier(nn.Module):
         images: torch.Tensor,
         use_gradient_checkpointing: bool,
     ) -> torch.Tensor:
+        # images=[V_chunk,3,224,224]；ViT-H/14 固定层输出 [V_chunk,257,1280]。
+        # 257=1 个 CLS+16*16 个空间 token；在线图先保留空间结构，不能在这里全局均值池化。
         if (
             use_gradient_checkpointing
             and torch.is_grad_enabled()
@@ -847,6 +859,7 @@ class NeuroSigVIAClassifier(nn.Module):
             raise ValueError("encode_batch_size must be positive")
 
         batch_size, patch_count, channels, window_size = raw_windows.shape
+        # [B,N,C,L] -> [B*N,C,L]，掩码压平后仅把有效块送入 renderer。
         flat_raw = raw_windows.reshape(-1, channels, window_size)
         flat_lengths = valid_lengths.reshape(-1)
         flat_mask = patch_mask.reshape(-1).to(dtype=torch.bool)
@@ -868,6 +881,7 @@ class NeuroSigVIAClassifier(nn.Module):
                 valid_lengths=chunk_lengths,
                 return_diagnostics=True,
             )
+            # renderer 输出 [V_chunk,3,H,H]；当前 H=224，每个有效内部块只形成一张活动图。
             hidden = self._vision_hidden(
                 vision_model,
                 images,
@@ -877,7 +891,9 @@ class NeuroSigVIAClassifier(nn.Module):
                 hidden,
                 output_grid_size=spatial_grid_size,
             )
+            # 去 CLS 并将 16*16 网格平均池化为 4*4：[V_chunk,257,1280] -> [V_chunk,16,1280]。
             spatial = vision_model.project_pooled_representation(spatial)
+            # 冻结的 ln_post/proj 作用于最后一维；ViT-H/14 投影后为 [V_chunk,16,1024]。
             if not torch.is_tensor(spatial) or spatial.ndim != 3:
                 raise ValueError(
                     "visual projection must preserve [batch, spatial, dim]"
@@ -931,6 +947,7 @@ class NeuroSigVIAClassifier(nn.Module):
             valid_tokens.shape[1],
             valid_tokens.shape[2],
         )
+        # 返回 graph_tokens=[B,N,16,Dv]；TDBRAIN 默认 [B,4,16,1024]，损失/熵均为标量。
         return graph_tokens, {
             "selector_balance_loss": balance_loss,
             "selector_soft_usage": soft_usage,
@@ -973,6 +990,9 @@ class NeuroSigVIAClassifier(nn.Module):
             spatial_grid_size=graph_spatial_grid_size,
             use_gradient_checkpointing=vision_gradient_checkpointing,
         )
+        # fusion 输入 line=[B,N,Dv]、graph=[B,N,16,Dv]、mantis=[B,N,C,Dt]。
+        # 内部完成通道注意力、Line-Q/Graph-KV、两模态注意力与 N 轴池化，返回 logits=[B,K]。
+        # K 为训练集类别数；TDBRAIN 二分类 K=2，每个 256 点输入最终只对应一行预测。
         logits, details = self.fusion(
             line_tokens,
             graph_tokens,
@@ -986,6 +1006,8 @@ class NeuroSigVIAClassifier(nn.Module):
 
 
 def _build_static_loader(bundle, labels, indices, batch_size, shuffle):
+    # TensorDataset 按输入窗口行对齐六项静态张量、labels=[M] 和 sample_indices=[M]。
+    # 训练仅打乱行顺序；sample_indices 保存源 split 行号，评估时据此对齐受试者 ID。
     dataset = TensorDataset(
         bundle["raw_windows"],
         bundle["line_tokens"],
@@ -1015,6 +1037,7 @@ def _forward_training_batch(
     vision_gradient_checkpointing: bool,
 ):
     raw, line, mantis, mask, fraction, lengths, labels, sample_indices = batch
+    # 半精度缓存入设备后转回 float32；仅 labels=[B] 送分类损失，N 个内部块不复制标签。
     logits, details = model(
         raw.to(device=device, dtype=torch.float32),
         line.to(device=device, dtype=torch.float32),
@@ -1067,6 +1090,7 @@ def _run_epoch(
             graph_spatial_grid_size=graph_spatial_grid_size,
             vision_gradient_checkpointing=vision_gradient_checkpointing,
         )
+        # criterion([B,K],[B])=[B]，均值后 Lce 为标量；当前脚本 L=Lce+0.1*Lalign+0.001*Lbalance。
         task_loss = criterion(logits, labels).mean()
         alignment_loss = details["alignment_loss"]
         selector_balance_loss = details["selector_balance_loss"]
@@ -1078,6 +1102,8 @@ def _run_epoch(
         if not torch.isfinite(loss):
             raise ValueError("adaptive Activity Graph training produced non-finite loss")
         loss.backward()
+        # 可训练融合层直接接收梯度；门控经渲染图像与冻结 OpenCLIP 的输入导数接收梯度。
+        # 下方检查总梯度存在且非零；若 balance 权重非零，单凭此检查不能隔离证明分类梯度路径。
         trainable_gate_parameters = [
             parameter
             for parameter in model.renderer.gate.region_cls.parameters()
@@ -1175,6 +1201,7 @@ def _evaluate(
             vision_gradient_checkpointing=False,
         )
         probabilities = torch.softmax(logits.float(), dim=-1)
+        # [B,K] 行概率 -> argmax=[B]；跨批拼接后 y_score=[M,K]，y_true/y_pred/sample_index=[M]。
         if not torch.isfinite(probabilities).all():
             raise ValueError("adaptive Activity Graph classifier returned non-finite scores")
         sample_indices_all.append(sample_indices.numpy())
@@ -1210,6 +1237,7 @@ def _evaluate(
         ).cpu().numpy(),
         "selector_valid_decisions": int(round(valid_count)),
     }
+    # 这里的窗口是 DataLoader 的原始 256 点样本，不是该样本内部 N=4 个 64 点块。
     window_metrics = compute_metrics_from_predictions(
         details["y_true"],
         details["y_pred"],
@@ -1625,6 +1653,8 @@ def train_neurosigvia_classifier(
     set_random_seed(random_seed)
     vision_model.requires_grad_(False)
     mantis_model.requires_grad_(False)
+    # requires_grad_(False) 冻结权重；eval() 固定编码器推理行为，二者均不等同于禁止输入梯度。
+    # 静态提取显式 no_grad；在线 OpenCLIP 仍受 autograd 跟踪，Mantis 不在训练 forward 中重算。
     vision_model.eval()
     mantis_model.eval()
     external_encoder_contracts = {
@@ -1762,6 +1792,7 @@ def train_neurosigvia_classifier(
 
     visual_dim = int(train_features["line_tokens"].shape[-1])
     temporal_dim = int(train_features["mantis_channel_tokens"].shape[-1])
+    # Dv、Dt 从实际缓存推断并跨 split 校验；不要把其他编码器的特征宽度硬套到本次运行。
     if int(train_features["raw_windows"].shape[2]) != channels:
         raise ValueError("cached raw channel count does not match channels")
     comparison_splits = [("test", test_features)]
@@ -1927,6 +1958,7 @@ def train_neurosigvia_classifier(
 
     if best_state is None:
         raise RuntimeError("training did not produce a valid checkpoint")
+    # 验证集每轮参与模型选择；测试标签不进入训练损失，最终测试返回 [M_test,K] 概率矩阵。
     model.load_state_dict(best_state)
     val_metrics, val_details = _evaluate(
         model,

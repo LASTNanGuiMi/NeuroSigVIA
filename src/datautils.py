@@ -204,6 +204,8 @@ EEG_MEDFORMER_SPECS = {
         },
     },
     "TDBRAIN": {
+        # TDBRAIN 主路径：磁盘共 72 个 legacy 文件编号；下面的固定名单仅选取 50 个。
+        # subject_count 是标签表/文件清单的大小，不是实际参与 train/vali/test 的人数。
         "channels": 33,
         "subject_count": 72,
         "class_names": {0: "healthy", 1: "parkinsons_disease"},
@@ -220,6 +222,7 @@ EEG_MEDFORMER_SPECS = {
             "test": (22, 23, 24, 25, 50, 51, 52, 53),
         },
         "expected_subject_counts": {"train": 34, "vali": 8, "test": 8},
+        # 预测单位是已经预处理好的 256 点窗口；每个窗口继承所属文件的类别标签。
         "expected_window_counts": {"train": 4320, "vali": 960, "test": 960},
         "expected_excluded_ids": (26, 27, 28) + tuple(range(54, 73)),
     },
@@ -1295,6 +1298,8 @@ def _eeg_medformer_content_sha256(data_root):
 
 
 def find_eeg_medformer_data_root(data_dir, dataset_name):
+    # TDBRAIN 输入为已生成的 Feature/feature_<id>.npy 与 Label/label.npy。
+    # 这里只定位处理后数据；本函数不读取原始 EEG，也不执行滤波或采样率转换。
     dataset_name = str(dataset_name).upper()
     if dataset_name not in EEG_MEDFORMER_DATASET_NAMES:
         raise ValueError(f"Unsupported Medformer EEG dataset: {dataset_name}")
@@ -1323,6 +1328,8 @@ def find_eeg_medformer_data_root(data_dir, dataset_name):
 
 
 def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
+    # 返回 EEGMedformerInventory 元数据对象；不将所有受试者窗口拼成训练张量。
+    # TDBRAIN 标签表 [72,2] 的列顺序为 [class_id, legacy_subject_id]。
     dataset_name = str(dataset_name).upper()
     if dataset_name not in EEG_MEDFORMER_SPECS:
         raise ValueError(f"Unsupported Medformer EEG dataset: {dataset_name}")
@@ -1380,6 +1387,8 @@ def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
     for subject_id in sorted(label_by_id):
         feature_path = feature_by_id[subject_id]
         array = np.load(feature_path, mmap_mode="r", allow_pickle=False)
+        # 单个 TDBRAIN 文件为 float64 [N_s,256,33]；N_s 随文件而变化。
+        # 此处的编号核对证明文件与标签表在本地相符，不额外证明原始 participant 身份映射。
         expected_tail = (256, spec["channels"])
         if array.ndim != 3 or tuple(array.shape[1:]) != expected_tail:
             raise ValueError(
@@ -1448,6 +1457,8 @@ def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
 
 
 def _normalize_eeg_medformer_windows(windows):
+    # 输入/输出均为 [N_s,T,C]；TDBRAIN T=256,C=33，输出 dtype=float32。
+    # 每个窗口独立处理，mean/std 是 [N_s,1,33]，没有跨窗口或跨受试者拟合。
     windows = np.asarray(windows)
     if windows.ndim != 3:
         raise ValueError(f"Expected EEG windows [N,T,C], got {windows.shape}.")
@@ -1463,6 +1474,8 @@ def _normalize_eeg_medformer_windows(windows):
 
 
 def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subject_ids=None):
+    # TDBRAIN 的 split 总窗口数 S 分别为 train=4320、vali=960、test=960。
+    # 函数返回 (DataLoader, labels[S])；loader 的每项只有输入张量，标签单独传递。
     spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
     record_by_id = {record.subject_id: record for record in inventory.records}
     subject_ids = inventory.split_ids[split]
@@ -1484,6 +1497,7 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
         (total_windows, spec["channels"], 256), dtype=np.float32
     )
     labels = np.empty(total_windows, dtype=np.int64)
+    # 以下两个 [S] 数组记录窗口来源；训练随机种子不会重新决定这里的受试者划分。
     sample_subject_ids = np.empty(total_windows, dtype=np.int64)
     sample_window_indices = np.empty(total_windows, dtype=np.int64)
     cursor = 0
@@ -1501,6 +1515,8 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
         cursor = next_cursor
 
     tensor_dataset = TensorDataset(torch.from_numpy(inputs))
+    # 单条 dataset[i][0] 为 [33,256]；一个 batch[0] 为 [B,33,256]。
+    # 当前 NeuroSigVIA.sh 为 TDBRAIN 设 B=8；这不是分类内部 64 点块的数量。
     tensor_dataset.sample_subject_ids = sample_subject_ids
     tensor_dataset.sample_window_indices = sample_window_indices
     tensor_dataset.split_name = split
@@ -1510,10 +1526,13 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
         batch_size=batch_size,
         shuffle=False,
     )
+    # 静态特征提取保持窗口顺序与 labels 对齐；训练器随后对索引批次执行 shuffle。
     return loader, labels
 
 
 def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None):
+    # 主方法 EEG 入口调用链：inventory -> 三次 split_loader -> EEGMedformerBundle。
+    # TDBRAIN: X_train[4320,33,256], X_val/X_test[960,33,256]；y 均为一维 int64。
     protocol = getattr(args, "eeg_protocol", "medformer_code_exact")
     if protocol != "medformer_code_exact":
         raise ValueError(f"Unsupported Medformer EEG protocol: {protocol}")
@@ -1572,6 +1591,7 @@ def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None
 
 
 def write_eeg_medformer_split_audit(bundle, result_dir):
+    # 输出 splits/TDBRAIN_subject_split.csv（含被排除编号），供协议与预测来源追溯。
     split_dir = Path(result_dir) / "splits"
     split_dir.mkdir(parents=True, exist_ok=True)
     inventory = bundle.inventory

@@ -10,6 +10,10 @@ DATASETS="adftd tdbrain apava shimmer10 pads11"
 SEEDS="42 43 44"
 GPUS="0 1 2 3 4"
 # Each dataset uses one GPU; its three seeds run sequentially.
+# TDBRAIN 阅读路径：configure_dataset -> runners.neurosigvia ->
+# get_eeg_medformer_dataloaders -> train_neurosigvia_classifier。
+# 当前 TDBRAIN 输入每批 [8,33,256]；每窗口内部切成 4 个 [33,64] 块，最终输出 [8,2]。
+# 中间维度注释位于 src/datautils.py、src/adaptive_graph_training.py 和 src/multimodal_fusion.py。
 declare -A BATCH_SIZES=(
   [adftd]=8 [tdbrain]=8 [apava]=8 [shimmer10]=1 [pads11]=4
 )

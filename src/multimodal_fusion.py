@@ -96,6 +96,9 @@ def compress_openclip_spatial_tokens(
             f"output={output_grid_size}"
         )
 
+    # 此处 D 是视觉 Transformer 的隐藏宽度，尚未应用 OpenCLIP 的 ln_post/proj 输出投影。
+    # 例如 ViT-H/14 在 224 像素输入下为 [M,257,1280]；保留 16 个空间 token 后为 [M,16,1280]。
+    # 具体网格和隐藏宽度取决于骨干，本函数通过 CLS 后 token 数的平方性进行核验。
     leading_shape = hidden_tokens.shape[:-2]
     spatial = hidden_tokens[..., 1:, :].reshape(
         -1,
@@ -104,6 +107,7 @@ def compress_openclip_spatial_tokens(
         embedding_dim,
     )
     spatial = spatial.permute(0, 3, 1, 2)
+    # [M,D,H,W] -> [M,D,4,4] -> [M,16,D]；任意前导批次轴会在返回前恢复。
     compressed = F.adaptive_avg_pool2d(
         spatial,
         output_size=(output_grid_size, output_grid_size),
@@ -197,6 +201,8 @@ class AdaptiveGranularityFusionModule(nn.Module):
         self.num_classes = num_classes
         self.fusion_dim = fusion_dim
 
+        # 将各外层 patch 的 C 个 Mantis 通道向量 [B,N,C,Dt] 汇聚成 [B,N,F]。
+        # C 来自数据/缓存；TDBRAIN 为 33。Dt 是实际 Mantis 输出宽度，F=fusion_dim。
         self.channel_pool = ChannelAttentionPool(
             input_dim=temporal_dim,
             output_dim=fusion_dim,
@@ -229,6 +235,8 @@ class AdaptiveGranularityFusionModule(nn.Module):
             fusion_heads=fusion_heads,
             branch_names=["cross_attention_visual", "mantis_temporal"],
         )
+        # 两个分支 token 经 concat_attn 后展平为 2F；构造函数默认 F=512 时输入宽度为 1024。
+        # 当前 scripts/NeuroSigVIA.sh 显式传 F=128，因此该启动脚本下的分类器输入宽度为 256。
         self.classifier = _MLPHead(
             input_dim=self.temporal_visual_fusion.output_dim,
             hidden_dim=classifier_hidden_dim,
@@ -412,6 +420,11 @@ class AdaptiveGranularityFusionModule(nn.Module):
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
         """Return sample logits and patch-level fusion diagnostics."""
 
+        # 输入轴含义：B=数据窗口数，N=每窗口的外层 patch 数，P=图像空间 token 数。
+        # TDBRAIN 使用 256 点窗口、64/64 外层切分时 N=4，当前图像网格 P=16：
+        # line [B,4,Dv]，graph [B,4,16,Dv]，Mantis [B,4,33,Dt]，mask/fractions [B,4]。
+        # Dv、Dt 由特征缓存及编码器实际输出确定；不能把 OpenCLIP 隐藏宽度直接当作 Dv。
+        # 当前启动脚本显式设置 F=128、fusion_heads=2；下文 shape 中 F 表示传入值。
         mask, fractions = self._validate_inputs(
             line_tokens,
             graph_spatial_tokens,
@@ -419,6 +432,7 @@ class AdaptiveGranularityFusionModule(nn.Module):
             patch_mask,
             valid_fraction,
         )
+        # 输出 temporal_tokens [B,N,F]、channel_weights [B,N,C]，权重在通道维归一化。
         temporal_tokens, channel_weights = self.channel_pool(
             mantis_channel_tokens,
             patch_mask=mask,
@@ -439,6 +453,8 @@ class AdaptiveGranularityFusionModule(nn.Module):
                 patch_mask=mask,
             )
 
+        # visual_tokens 同为 [B,N,F]；InfoNCE 在同一数据窗口内部构造 [N_valid,N_valid] 相似度，
+        # 对齐相同 patch 的视觉/时序表示。返回标量损失，不在 batch 样本间构造负样本。
         alignment_loss = self.alignment(
             temporal_tokens,
             visual_tokens,
@@ -450,6 +466,8 @@ class AdaptiveGranularityFusionModule(nn.Module):
         valid_indices = flat_mask.nonzero(as_tuple=False).squeeze(1)
         flat_visual = visual_tokens.reshape(batch_size * patch_count, -1)
         flat_temporal = temporal_tokens.reshape(batch_size * patch_count, -1)
+        # 只取 M_valid 个有效 patch：两路 [M_valid,F] -> 双 token [M_valid,2,F] -> [M_valid,2F]。
+        # 这里的自注意力沿两种分支交互；时间 patch 间的最终合并在 valid_fraction_weighted_pool 完成。
         valid_patch_features = self.temporal_visual_fusion(
             [
                 flat_visual.index_select(0, valid_indices),
@@ -470,11 +488,15 @@ class AdaptiveGranularityFusionModule(nn.Module):
             patch_count,
             self.temporal_visual_fusion.output_dim,
         )
+        # 回填的 patch_features [B,N,2F] 按有效时长加权为 [B,2F]。
+        # TDBRAIN 的四个完整 64 点 patch 的 fraction 均为 1，此时等价于四个 patch 的算术平均。
         sample_features = valid_fraction_weighted_pool(
             patch_features,
             mask,
             fractions,
         )
+        # 每个原始 256 点数据窗口输出一个类别向量 [B,num_classes]，不是每个内部 patch 单独输出标签。
+        # logits 尚未 softmax；TDBRAIN 当前二分类协议对应 [B,2]。
         logits = self.classifier(sample_features)
 
         return logits, {

@@ -35,6 +35,8 @@ PATCH_MINDTS_ARCHITECTURE = "patch_mindts_v4"
 PATCH_TAIL_POLICY = "right_zero_pad_then_crop_valid_prefix_v1"
 PATCH_POOLING_POLICY = "valid_fraction_weighted_mean_v1"
 
+# TDBRAIN 的 adaptive_granularity 主路径复用本文件的切片、静态编码、池化和评估 helpers。
+# 它调用 adaptive_graph_training.py 的训练器；不能据本文件名误认其使用旧版图候选缓存训练器。
 PATCH_FEATURE_KEYS = (
     "line_tokens",
     "graph_tokens",
@@ -82,6 +84,7 @@ def make_temporal_patches(
             f"inputs must have shape [batch, channels, time], got {tuple(tensor.shape)}"
         )
     batch_size, channels, time_steps = tensor.shape
+    # 输入维度 [B,C,T]：TDBRAIN 标准输入 [B,33,256]；B 轴对应有独立标签的分类窗口。
     if batch_size < 1 or channels < 1 or time_steps < 1:
         raise ValueError(f"input dimensions must be non-empty, got {tuple(tensor.shape)}")
 
@@ -117,6 +120,7 @@ def make_temporal_patches(
     else:
         patch_count = 1 + math.ceil((time_steps - window_size) / stride)
 
+    # N=max(1,1+ceil((T-L)/S))；默认 T=256、L=S=64 得到 N=4，无重叠且无尾部补零。
     required_time = (patch_count - 1) * stride + window_size
     if required_time > time_steps:
         padded = F.pad(tensor, (0, required_time - time_steps), value=0)
@@ -126,6 +130,7 @@ def make_temporal_patches(
     patches = padded.unfold(-1, window_size, stride)[..., :patch_count, :]
     patches = patches.permute(0, 2, 1, 3).contiguous()
 
+    # unfold 得 [B,C,N,L]，调轴得到所有模态共用的 [B,N,C,L]，TDBRAIN 为 [B,4,33,64]。
     starts = torch.arange(
         patch_count,
         dtype=torch.long,
@@ -142,6 +147,7 @@ def make_temporal_patches(
     patch_mask = valid_lengths > 0
     valid_fraction = valid_lengths.to(dtype=torch.float32) / float(window_size)
 
+    # time_mask=[B,N,L]；lengths/mask/fraction 均为 [B,N]；完整块 fraction=1，空块 mask=False。
     patches = patches.masked_fill(~time_mask[:, :, None, :], 0)
     return TemporalPatchBatch(
         patches=patches,
@@ -181,6 +187,7 @@ class ChannelAttentionPool(nn.Module):
         nn.init.normal_(self.channel_embeddings, mean=0.0, std=0.02)
 
     def forward(self, tokens, patch_mask=None):
+        # tokens=[B,N,C,Dt] -> values=[B,N,C,F]；F=fusion_dim，当前 TDBRAIN 脚本设为 128。
         if tokens.ndim != 4:
             raise ValueError(
                 "Mantis channel tokens must have shape [B, N, C, D], got "
@@ -200,6 +207,7 @@ class ChannelAttentionPool(nn.Module):
         weights = torch.softmax(scores.float(), dim=-1).to(dtype=values.dtype)
         pooled = torch.sum(weights.unsqueeze(-1) * values, dim=2)
 
+        # softmax 沿 C 轴，weights=[B,N,C]，通道加权和 pooled=[B,N,F]，不是通道拼接。
         if patch_mask is not None:
             if patch_mask.shape != tokens.shape[:2]:
                 raise ValueError(
@@ -1467,6 +1475,7 @@ class MaskedIntraSampleInfoNCE(nn.Module):
         temporal = F.normalize(
             self.temporal_projection(temporal_tokens), dim=-1, eps=1e-8
         )
+        # 两路 [B,N,F] 分别投影并归一化为 [B,N,A]；A=alignment_dim，当前脚本为 256。
         visual = F.normalize(
             self.visual_projection(visual_tokens), dim=-1, eps=1e-8
         )
@@ -1481,6 +1490,8 @@ class MaskedIntraSampleInfoNCE(nn.Module):
                 continue
             sample_temporal = temporal[sample_index].index_select(0, valid_indices)
             sample_visual = visual[sample_index].index_select(0, valid_indices)
+            # 同一个输入窗口内部得到 [Nv,Nv] 相似度矩阵；对角为同块正对，其余内部块为负对。
+            # TDBRAIN 完整 256 点窗口 Nv=4；不跨 B 轴采样负对，有效块少于 2 时跳过该样本。
             logits = (
                 sample_temporal.float() @ sample_visual.float().transpose(0, 1)
             ) / self.temperature
@@ -1502,6 +1513,7 @@ class MaskedIntraSampleInfoNCE(nn.Module):
                 )
             losses.append(sample_loss / math.log(int(valid_indices.numel())))
 
+            # 两方向交叉熵按有效时长加权，再除 log(Nv)；最后对符合条件的输入窗口取均值。
         if not losses:
             return zero_loss
         return torch.stack(losses).mean()
@@ -1527,6 +1539,7 @@ class _MLPHead(nn.Module):
         self.network = nn.Sequential(*layers)
 
     def forward(self, inputs):
+        # 当前自适应主路径：池化输入 [B,2F] -> 隐层 [B,H] -> 未归一化 logits=[B,K]。
         return self.network(inputs)
 
 
@@ -1536,6 +1549,7 @@ def valid_fraction_weighted_pool(
     valid_fraction,
 ):
     """Pool valid patches while giving a partial tail its true time weight."""
+    # 输入 [B,N,D] 与两项 [B,N] 权重，沿 N 求加权均值得 [B,D]；完整 TDBRAIN 块等权 1/4。
     if patch_features.ndim != 3:
         raise ValueError("patch_features must have shape [B, N, D]")
     if patch_mask.shape != patch_features.shape[:2]:
@@ -2112,6 +2126,8 @@ class PatchMindTSFusionModule(nn.Module):
 
 
 def _encode_visual_images(model, images, device):
+    # 静态折线图 [V,3,224,224] -> forward_vit 的 [V,257,1280]（ViT-H/14）。
+    # mean 聚合排除 CLS，接冻结 ln_post/proj 后为 [V,1024]，再沿特征维做 L2 归一化。
     if images.ndim != 4 or images.shape[1] != 3:
         raise ValueError(f"visual images must have shape [B, 3, H, W], got {tuple(images.shape)}")
     hidden = model.forward_vit(images.to(device))
@@ -2127,6 +2143,8 @@ def _encode_visual_images(model, images, device):
 
 
 def _line_images_for_chunk(windows, valid_lengths):
+    # windows=[V,C,L]，lengths=[V]；同有效长度分组，先裁去尾部零填充再绘图。
+    # 每个内部块的 C 个通道共画一张分泳道 RGB 折线图，返回 [V,3,224,224]。
     images = [None] * len(windows)
     for length in torch.unique(valid_lengths, sorted=True).tolist():
         length = int(length)
@@ -2151,6 +2169,8 @@ def _extract_line_tokens(
     device,
     encode_batch_size,
 ):
+    # adaptive_graph_training 的静态提取直接调用此函数：[V,C,L] -> [V,Dv] CPU 张量。
+    # no_grad 是有意的静态缓存边界；在线活动图使用单独的可微渲染器，不从这里回传。
     batches = []
     for start in range(0, len(windows), encode_batch_size):
         stop = min(start + encode_batch_size, len(windows))
@@ -2214,6 +2234,9 @@ def _extract_mantis_channel_tokens(
     device,
     encode_batch_size,
 ):
+    # 输入有效块 [V,C,L]；逐通道裁切为 [V_length,1,length] 后线性插值至 [V_length,1,512]。
+    # Mantis 单次返回 [V_chunk,Dt]；按原位置重组并堆叠通道后返回 [V,C,Dt]。
+    # 当前调用的是原始 Mantis8M 的 forward，不是 embedding.py 里的 MantisTrainer.transform。
     channels = windows.shape[1]
     channel_outputs = []
     for channel_index in range(channels):
@@ -2598,6 +2621,8 @@ def _aggregate_subject_predictions(
     classes,
 ):
     """Average window probabilities so every subject contributes exactly once."""
+    # 输入窗口 y_score=[M,K]，sample_indices=[M] 索引源 split 受试者表；输出为 [U,K]。
+    # U=本 split 的独立受试者数；每人对原始分类窗口概率求均值，之后 argmax，不是多数投票。
     y_true = np.asarray(y_true, dtype=np.int64)
     y_score = np.asarray(y_score, dtype=np.float64)
     sample_indices = np.asarray(sample_indices, dtype=np.int64)

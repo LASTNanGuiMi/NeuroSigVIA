@@ -815,6 +815,8 @@ def _known_legacy_adaptive_cache_signature(
 
 
 if __name__ == "__main__":
+    # TDBRAIN 阅读入口：scripts/NeuroSigVIA.sh -> 本模块 -> src/datautils.py。
+    # 当前主配置 mlp + adaptive_granularity 最终调用 train_neurosigvia_classifier。
     args = parse_args()
 
     set_random_seed(args.random_seed)
@@ -1283,6 +1285,8 @@ if __name__ == "__main__":
         audit_path = None
         if args.datasets == "eeg":
             fixed_validation_split = True
+            # TDBRAIN 固定 34/8/8 个 legacy 文件编号，窗口总数为 4320/960/960。
+            # loader 每批仅返回 (X,)，X=[B,33,256]；对应的一维 labels 由 bundle 单独提供。
             eeg_bundle = get_eeg_medformer_dataloaders(dataset, args)
             train_loader = eeg_bundle.train_loader
             train_labels = eeg_bundle.train_labels
@@ -1389,6 +1393,7 @@ if __name__ == "__main__":
             )
         channels, T = train_loader.dataset[0][0].shape
 
+        # TDBRAIN 在此得到 channels=33、T=256；后续 outer_patch_size=64 形成 4 个内部块。
         mantis_embedding = None
         moment_embedding = None
         vision_embedding_1 = None
@@ -1644,6 +1649,9 @@ if __name__ == "__main__":
                         )
                         print(f"Feature cache key: {feature_cache_key}")
                     if args.modal_interaction == "adaptive_granularity":
+                        # train_neurosigvia_classifier 依次准备静态 line/Mantis 特征、在线活动图、
+                        # 融合与 MLP；4 个 64 点块最终汇聚成一个 256 点窗口的 logits[B,2]。
+                        # 这里直接传入固定 val_loader；random_seed=42/43/44 不重划分 TDBRAIN 受试者。
                         val_metrics, test_metrics, train_indices, val_indices = (
                             train_neurosigvia_classifier(
                                 train_loader=train_loader,

@@ -132,6 +132,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
     ) -> torch.Tensor:
         """Normalize only the gate input without changing graph layout rules."""
 
+        # signals [M,C,T]、sample_valid_mask [M,T] -> [M,C,T]；M 表示本次渲染的外层 patch 数。
         valid = sample_valid_mask[:, None, :]
         finite = torch.nan_to_num(signals, nan=0.0, posinf=0.0, neginf=0.0)
         masked = finite.masked_fill(~valid, float("nan"))
@@ -164,6 +165,8 @@ class AdaptiveActivityGraphRenderer(nn.Module):
     ) -> torch.Tensor:
         """Average each temporal block and restore a 16-point waveform lane."""
 
+        # [M,C,R,16] -> [M,C,R,16/g,g] -> 均值 [M,C,R,16/g] -> [M,C,R,16]。
+        # g=4/8/16 时每区分别有 4/2/1 个均值；选择后仍保留 16 点长度，未减少外层 patch 数。
         subpatch_count = regions.shape[-1] // granularity
         patches = regions.reshape(
             *regions.shape[:-1], subpatch_count, granularity
@@ -189,6 +192,9 @@ class AdaptiveActivityGraphRenderer(nn.Module):
     ):
         """Render an RGB graph while preserving the gate's gradient path."""
 
+        # 上游 NeuroSigVIAClassifier._encode_adaptive_graphs 传入外层 patch [M,C,T]。
+        # TDBRAIN 在 outer_patch_size/stride=64/64 时：[B,33,256] -> [B,4,33,64]，
+        # 合并前两轴并按 encode_batch_size 分块后，本函数看到 [M,33,64]（M 不固定为 B）。
         if not torch.is_tensor(signals) or signals.ndim != 3:
             raise ValueError("signals must be a tensor with shape [B,C,T]")
         if min(signals.shape) < 1:
@@ -213,6 +219,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
         gate_input = self._normalize_gate_input(working, sample_valid_mask)
 
         region_count = (original_time_steps + self.region_length - 1) // self.region_length
+        # 64 点外层 patch 对应 R=4，无需补齐；若直接调用本类处理其他长度，则 R=ceil(T/16)。
         padded_time = region_count * self.region_length
         if padded_time != original_time_steps:
             pad_width = padded_time - original_time_steps
@@ -232,6 +239,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             working.shape[0], region_count, self.region_length
         )
         region_valid = region_sample_mask.any(dim=-1)
+        # 样本掩码 [M,R,16] 先得到区域掩码 [M,R]，再沿通道广播为 Gate 要求的 [M,C,R]。
         gate_diagnostics = self.gate(
             gate_regions,
             region_valid_mask=region_valid[:, None, :].expand(
@@ -240,6 +248,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             generator=generator,
         )
 
+        # TDBRAIN 64 点外层 patch 的候选形状为 [M,33,4,3,16]，不是三张已经编码的图像。
         candidates = torch.stack(
             [
                 self._candidate_waveform(
@@ -253,6 +262,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
         selected_regions = torch.einsum(
             "bcrk,bcrkt->bcrt", selection_weights, candidates
         )
+        # 选中的区域 [M,33,4,16] 拼回 [M,33,64]；输出仍保留所有通道及有效时间点。
         selected = selected_regions.reshape(
             working.shape[0], working.shape[1], padded_time
         )[..., :original_time_steps]
@@ -260,6 +270,8 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             ~sample_valid_mask[:, None, :original_time_steps], 0.0
         )
 
+        # img_size 默认 224，因而通常得到 [M,3,224,224]；RGB 的 3 与 EEG 的 33 个通道不同。
+        # 下游在此图像上保留梯度通过冻结 OpenCLIP，以便训练预渲染门控。
         image = render_paper_activity_graph(
             selected,
             valid_lengths=lengths,

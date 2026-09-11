@@ -235,6 +235,8 @@ class LineGraphCrossAttention(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Apply Line-Q/Activity-Graph-KV cross-attention per window."""
 
+        # 此处 N 是外层时间 patch 数，P 是每张 Activity Graph 的图像空间 token 数。
+        # TDBRAIN 的 256 点窗口按 64/64 切分时 N=4，当前图像网格为 4x4，即 P=16。
         valid_mask = self._validate_inputs(
             line_tokens,
             graph_spatial_tokens,
@@ -256,6 +258,7 @@ class LineGraphCrossAttention(nn.Module):
             torch.zeros_like(graph_spatial_tokens),
         )
 
+        # line [B,N,D_line] 经投影后得到 query [B*N,1,F]，F=self.fusion_dim。
         query = self.query_projection(safe_line_tokens).reshape(
             batch_size * num_patches,
             1,
@@ -266,8 +269,11 @@ class LineGraphCrossAttention(nn.Module):
             graph_token_count,
             self.graph_dim,
         )
+        # keys/values 均为 [B*N,P,F]；MultiheadAttention 在每个外层 patch 内对 P 个位置计算权重。
         keys = self.key_projection(flat_graph)
         values = self.value_projection(flat_graph)
+        # attended [B*N,1,F]；请求诊断时 attention_weights [B*N,num_heads,1,P]。
+        # 当前 scripts/NeuroSigVIA.sh 传入 F=128、2 头，对应每头 64 维；构造参数可改变这些值。
         attended, attention_weights = self.cross_attention(
             query,
             keys,
@@ -280,6 +286,7 @@ class LineGraphCrossAttention(nn.Module):
             query + self.attention_dropout(attended)
         )
         hidden = self.output_norm(hidden + self.feed_forward(hidden))
+        # 去掉长度为 1 的查询轴并恢复 [B,N,F]；完整 TDBRAIN 例为 [B,4,F]。
         output = hidden.squeeze(1).reshape(
             batch_size,
             num_patches,

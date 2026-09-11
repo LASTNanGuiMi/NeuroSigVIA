@@ -88,6 +88,8 @@ def _find_state_mapping(checkpoint: Mapping[str, Any]) -> Mapping[str, Any]:
 class AdaptiveGranularityGate(nn.Module):
     """Choose one of ``4/8/16`` for every channel-wise 16-sample region."""
 
+    # 这里的 16 点是外层 patch 内部的区域长度，4/8/16 是区域内求均值的块长。
+    # TDBRAIN 的 256 点数据窗口先由上游按 64/64 切成 4 个外层 patch；本门控不负责该切分。
     region_length = 16
     granularities = (4, 8, 16)
     upstream_repository = UPSTREAM_REPOSITORY
@@ -106,6 +108,7 @@ class AdaptiveGranularityGate(nn.Module):
         if not math.isfinite(temperature) or temperature <= 0.0:
             raise ValueError(f"temperature must be positive, got {temperature}")
         self.temperature = float(temperature)
+        # 共享 MLP 沿最后一维执行 16 -> 64 -> 3；通道数和区域数不进入参数矩阵的大小。
         self.region_cls = nn.Sequential(
             nn.Linear(self.region_length, 64),
             nn.ReLU(),
@@ -206,6 +209,8 @@ class AdaptiveGranularityGate(nn.Module):
         generator: Optional[torch.Generator] = None,
     ) -> dict[str, torch.Tensor]:
         """Route ``[B,C,R,16]`` regions and return live diagnostic tensors."""
+        # 此处 B 是本次渲染的外层 patch 数（可分块处理），不是原始数据窗口的 batch 大小。
+        # 对 TDBRAIN 的单个 64 点 patch：C=33、R=4，输入 [B,33,4,16]。
         if not torch.is_tensor(regions) or regions.ndim != 4:
             raise ValueError("regions must have shape [B,C,R,16]")
         if regions.shape[-1] != self.region_length or min(regions.shape[:3]) < 1:
@@ -234,6 +239,7 @@ class AdaptiveGranularityGate(nn.Module):
                 "regions and AdaptiveGranularityGate must be on the same device"
             )
         clean_logits = self.region_cls(regions.to(dtype=gate_parameter.dtype))
+        # 最后一维依次对应块长 4、8、16；clean_probs 不含 Gumbel 噪声或温度缩放，供诊断/平衡项使用。
         clean_probs = F.softmax(clean_logits, dim=-1)
 
         if self.training and not self.gate_frozen:
@@ -258,6 +264,8 @@ class AdaptiveGranularityGate(nn.Module):
             soft_weights = clean_probs
             weights = hard_weights
 
+        # logits/probs/weights 均为 [B,C,R,3]；indices 和 region_valid_mask 为 [B,C,R]。
+        # indices 的 0/1/2 是候选下标，须通过 granularities 映射为实际块长 4/8/16。
         valid_expanded = valid.unsqueeze(-1)
         return {
             "clean_logits": clean_logits.masked_fill(~valid_expanded, 0.0),

@@ -18,6 +18,9 @@ import torch.nn as nn
 class AdaptiveTemporalGranularitySelector(nn.Module):
     """Select a temporal-granularity candidate for each cached sample."""
 
+    # 这是历史候选特征缓存路径的“编码后”软选择器，由 mlp_classifier.FusionModule 按配置构造。
+    # adaptive_granularity 主路径使用 temporal_granularity.AdaptiveGranularityGate 在绘图前选择；
+    # 两者输入、选择位置均不同，不能把本类的 K 个 embedding 当成当前的 4/8/16 区域波形。
     def __init__(
         self,
         feature_dim,
@@ -89,6 +92,8 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
         )
 
     def forward(self, flat_embeddings):
+        # 输入是展平的候选向量 [B,K*D]，不是 EEG 原始数据 [B,33,256]。
+        # K=num_granularities、D=feature_dim 均由调用方提供；本模块不固定 K=3 或具体视觉骨干维度。
         self.last_weights = None
         self.last_fallback_codes = None
         self.last_fallback_indices = None
@@ -100,11 +105,13 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
                 f"{tuple(flat_embeddings.shape)}."
             )
 
+        # 恢复候选轴 [B,K,D]；随后在 D 维归一化、在 K 维计算权重，不改变候选个数。
         candidates = flat_embeddings.reshape(
             flat_embeddings.shape[0],
             self.num_granularities,
             self.feature_dim,
         )
+        # 每个候选的有效标记 [B,K]：必须全为有限值且范数非零。
         finite_candidates = torch.isfinite(candidates).all(dim=2)
         safe_candidates = torch.nan_to_num(
             candidates,
@@ -134,6 +141,7 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
             safe_candidates,
             dim=-1,
         )
+        # 共享打分器 D -> hidden_dim -> 1，移除末维后得到 [B,K]。
         logits = self.scorer(
             self.normalization(normalized_candidates)
         ).squeeze(-1)
@@ -149,6 +157,7 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
             posinf=0.0,
             neginf=0.0,
         )
+        # 这是连续 softmax 加权；不同于预渲染 Gate 的训练期 hard straight-through 选择。
         weights = torch.softmax(safe_logits / self.temperature, dim=1)
 
         base_candidate = normalized_candidates[
@@ -189,6 +198,7 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
         fallback_weights.scatter_(1, fallback_indices.unsqueeze(1), 1.0)
         weights = torch.where(fallback.unsqueeze(1), fallback_weights, weights)
 
+        # 按候选轴求和：[B,K,1] * [B,K,D] -> [B,D]。
         selected_sum = torch.sum(
             weights.unsqueeze(-1) * normalized_candidates,
             dim=1,
@@ -226,6 +236,7 @@ class AdaptiveTemporalGranularitySelector(nn.Module):
             raise FloatingPointError(
                 "Adaptive granularity produced non-finite weights or output."
             )
+        # last_* 仅保存无梯度诊断；返回的 selected [B,D]、weights [B,K] 保留训练计算图。
         self.last_weights = weights.detach()
         self.last_fallback_codes = fallback_codes.detach()
         self.last_fallback_indices = torch.where(
