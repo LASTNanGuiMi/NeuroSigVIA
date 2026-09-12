@@ -18,10 +18,9 @@ The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 | `shimmer10` | `Shimmer_10_session10_AFC` | `(N,6,4096)` | subject-level 69/23/25; HC versus MildPD/ModeratePD |
 | `pads11` | `PADS_11_task08_TouchIndex` | `(N,6,976)` | subject-level 280/92/97 source split; Healthy versus Parkinson uses 212/70/73 after excluding OMD |
 
-The selected wearable protocols use a fixed data-split seed of 42. The current
-method scripts default to training seeds 42, 43 and 44. Edit `SEEDS` at the top
-of the method script to select training seeds; output and cache paths follow
-automatically. Training-only statistics are used
+The selected wearable protocols use a fixed data-split seed of 42. Each method
+script explicitly lists a separate Python command for training seeds 42, 43
+and 44, including the matching result and cache paths. Training-only statistics are used
 whenever normalization is required. See `DATA_PROCESSING.md` for the
 full protocol.
 
@@ -33,7 +32,8 @@ NeuroSigVIA/
 |-- runners/
 |   |-- __init__.py
 |   |-- neurosigvia.py
-|   `-- baselines.py
+|   |-- baselines.py
+|   `-- numeric_ablation.py
 |-- third_party/medformer/
 |-- third_party/timesnet/
 |-- src/
@@ -76,7 +76,8 @@ NeuroSigVIA/
 |   |-- PatchTST.sh
 |   |-- Transformer.sh
 |   |-- TimesNet.sh
-|   `-- lib/experiments.sh
+|   |-- NeuroSigVIA_NumericOnly.sh
+|   `-- lib/explicit_experiments.sh
 |-- tests/
 |-- DATA_PROCESSING.md
 |-- ANONYMITY.md
@@ -86,7 +87,8 @@ NeuroSigVIA/
 ```
 
 Training implementations live in `runners/`: `neurosigvia.py` runs the current
-method and `baselines.py` runs the comparison models. Shared baseline dataset
+method, `baselines.py` runs the comparison models, and `numeric_ablation.py`
+runs the paired NumericOnly ablation. Shared baseline dataset
 loading lives in `data_loading/experiment.py`. The method shell scripts call
 these modules with `python -m`; root `main.py` only forwards existing queued
 commands to `runners.neurosigvia`.
@@ -169,8 +171,10 @@ Healthy/Parkinson in the three partitions. Channel normalization statistics
 are fitted on the retained training samples only and then reused for validation
 and test data.
 
-To run only this endpoint, set `DATASETS="pads11"` and `GPUS="0"` at the top
-of `scripts/NeuroSigVIA.sh`, then run:
+To run only this endpoint, retain the PADS11 dataset block in
+`scripts/NeuroSigVIA.sh` and remove or comment out the other complete dataset
+blocks, including their associated `PIDS+=("$!")` lines. Set
+`export CUDA_VISIBLE_DEVICES=0` inside the retained block, then run:
 
 ```bash
 conda activate neurosigvia
@@ -214,7 +218,12 @@ components do not constitute a complete AGCNN reproduction. See
 [source and adaptation credits](SOURCE_NOTES.md) for both paper sources and
 their implementation boundaries.
 
-Each method has one script with a direct Python classification command, following Medformer's method-script layout. The existing method scripts default to all five datasets for training seeds 42, 43 and 44; TimesNet defaults to the four non-ADFTD datasets:
+Each method script lists every dataset and seed as a separate multiline
+`python -u -m ...` command, with one argument per line. A dataset block is a
+subshell with its own `export CUDA_VISIBLE_DEVICES`; its seed 42, 43 and 44
+commands run sequentially, while dataset blocks run in parallel. NeuroSigVIA
+and the six Medformer-family scripts cover all five datasets; TimesNet and
+NumericOnly cover the four non-ADFTD datasets:
 
 ```bash
 conda activate neurosigvia
@@ -231,14 +240,19 @@ bash scripts/TimesNet.sh
 
 Its defaults are TDBRAIN/APAVA/Shimmer10/PADS11 on GPUs 0/1/2/3, batch sizes
 8/8/1/4, and sequential training seeds 42/43/44 on each GPU. The call chain is
-`scripts/TimesNet.sh` -> `scripts/lib/experiments.sh` -> `runners.baselines` ->
+`scripts/TimesNet.sh` -> `runners.baselines` ->
 `third_party/timesnet/models/TimesNet.py::Model`. The adapter transposes loader
 inputs from `[B,C,T]` to `[B,T,C]`, supplies an all-ones padding mask, and uses
-the official classification head. Window probabilities are averaged per
-subject before computing the six subject-level metrics.
+the official classification head. It reports the six window-level metrics;
+mean window probabilities per subject provide supplementary subject metrics.
+The sourced `scripts/lib/explicit_experiments.sh` handles run directories,
+GPU locks, logs and process management; model parameters stay in each command.
 
-TimesNet deliberately keeps its existing integration configuration: split seed
-42, `d_model=128`, `d_ff=256`, two layers, dropout 0.1, AdamW learning rate
+The TimesNet script records the user-requested retrospective combination of
+the screenshot and subsequent sensitivity runs: dropout 0.3 for APAVA/Shimmer10
+and 0.1 for TDBRAIN/PADS11. This combination was chosen by comparing reported
+test Macro-F1, not by a shared validation-tuning procedure. Its remaining
+configuration is unchanged: split seed 42, `d_model=128`, `d_ff=256`, two layers, AdamW learning rate
 `3e-4`, weight decay `1e-3`, at most 100 epochs, and early stopping with warmup
 10, patience 12 and `min_delta=0.002`. It uses `top_k=3` and `num_kernels=6`;
 `n_heads=8` is accepted but unused by its convolution architecture. See
@@ -256,7 +270,7 @@ upstream directory has no Shimmer10 or PADS11 entries, so those two retain local
 batch sizes 1/4 and the Medformer fallback `2,4,8` plus no augmentation; these
 fallback values are not claimed as upstream settings.
 
-The other method scripts default to GPUs 0/1/2/3/4 for ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each GPU processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
+NeuroSigVIA and the six Medformer-family scripts assign GPUs 0/1/2/3/4 to ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each dataset processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
 ```bash
 tmux new-session -s neurosigvia
@@ -264,13 +278,16 @@ conda activate neurosigvia
 bash scripts/NeuroSigVIA.sh
 ```
 
-Set datasets, training seeds, GPU assignments and per-dataset batch sizes in
-`DATASETS`, `SEEDS`, `GPUS` and `BATCH_SIZES` at the top of the chosen method
-script. For example, use `DATASETS="adftd apava"`, `SEEDS="42"` and `GPUS="0 1"`
-there to train those two datasets once. Use `GPUS="0"` to run all selected
-datasets sequentially on GPU 0. Training hyperparameters, including learning
-rate, epochs and early stopping, are written in the script's Python command;
-edit those values in the script before launching.
+Edit the desired dataset's `export CUDA_VISIBLE_DEVICES` and the explicit
+`--batch_size`, learning rate, epochs and early-stop arguments in each of its
+three Python commands. To omit a dataset, remove or comment out its complete
+subshell block and associated `PIDS+=("$!")` line. To omit a seed, remove or
+comment out its entire Python command, including all continuation lines.
+For example, to run ADFTD and APAVA seed 42 only, retain those two dataset
+blocks and their seed-42 commands, and assign one free GPU to each block.
+Dataset blocks remain concurrent; assigning the same GPU does not make them
+sequential unless `WAIT_FOR_GPUS=1` is enabled, and then lock acquisition
+determines the order.
 
 To inspect the full commands without launching:
 
@@ -281,21 +298,36 @@ DRY_RUN=1 bash scripts/NeuroSigVIA.sh
 Normal launches need no parameter prefixes or appended arguments. Optional
 runtime settings remain available for command inspection (`DRY_RUN`), choosing
 an interpreter (`PYTHON_BIN`), waiting for GPUs (`WAIT_FOR_GPUS`) and naming a
-run (`RUN_TAG`). When a selected GPU is occupied, the default exits before
-launching; enabling `WAIT_FOR_GPUS` keeps each dataset queued until its GPU is
+run (`RUN_TAG`). When a selected GPU is occupied, that dataset stops before
+training by default; enabling `WAIT_FOR_GPUS` keeps it queued until its GPU is
 free, with status `WAITING_FOR_GPU`.
 
-Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and status/manifest files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, edit `DATASETS` and `SEEDS` in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
+Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and job-status files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, retain only their explicit commands in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
-The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself keeps batch sizes 8/8/8/1/4 and its existing early stopping; the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter still uses AdamW, balanced cross entropy, ReduceLROnPlateau, validation subject Macro-F1 selection, mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
+The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself keeps batch sizes 8/8/8/1/4 and its existing early stopping; the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter uses AdamW, balanced cross entropy, ReduceLROnPlateau, explicitly selected validation window Macro-F1, supplementary mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
 The six Medformer-family scripts transfer the upstream classification-shell
 settings into NeuroSigVIA's fixed data and evaluation protocol; this is not a
 copy of the upstream training loop and not a claim about published scores.
 TimesNet remains a separately sourced configuration. Keep hyperparameter changes
 in the corresponding method script so the same `bash scripts/<Method>.sh`
-command reproduces its saved configuration. The batch scheduler derives output
-paths from the method, dataset, seed and run tag.
+command reproduces its saved configuration. Every command spells out its
+dataset, seed and output path beneath the shared run-tag directory.
+
+`scripts/NeuroSigVIA_NumericOnly.sh` lists 12 paired commands for
+TDBRAIN/APAVA/Shimmer10/PADS11 and seeds 42/43/44. Set `REFERENCE_RUN` to a
+completed main-method run with its `status/<RUN_TAG>/manifest.tsv`, the paired
+dataset/seed results and compatible feature caches; the script's default is a
+historical server run.
+The NumericOnly runner inherits model dimensions, training settings and cached
+Mantis inputs from each paired reference, initializes a fresh numeric-only
+model, and explicitly selects checkpoints by `window_macro_f1`. Its default
+GPU exports are Shimmer10=2, PADS11=3, APAVA=4 and TDBRAIN=5; edit each block
+to use available GPUs before launching:
+
+```bash
+REFERENCE_RUN=results/your_completed_main_run bash scripts/NeuroSigVIA_NumericOnly.sh
+```
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
@@ -336,7 +368,8 @@ The official TimesNet model and its required layers are under `third_party/times
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/NeuroSigVIA.sh` and seven baseline method scripts | Three seeds; TimesNet defaults to four non-ADFTD datasets, other scripts to five |
+| `scripts/NeuroSigVIA.sh` and seven baseline method scripts | Explicit commands for three seeds; TimesNet covers four non-ADFTD datasets, other scripts cover five |
+| `scripts/NeuroSigVIA_NumericOnly.sh` | Four datasets and three seeds paired with a completed `REFERENCE_RUN` and its cached features |
 | `third_party/timesnet/` | Pinned official TimesNet model, required layers, MIT license and integration notes |
 | `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |
 | `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |

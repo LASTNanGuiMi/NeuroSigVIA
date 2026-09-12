@@ -1,9 +1,13 @@
 """TimesNet integration checks: python -m unittest discover -s tests -p 'test_timesnet_integration.py'."""
 import contextlib
 import io
+import os
 from pathlib import Path
-import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 from types import ModuleType
 import unittest
 from unittest.mock import patch
@@ -53,11 +57,66 @@ def arguments(model="TimesNet", dataset="apava", *extra):
     return args
 
 
-def script_numeric_setting(text, name):
-    match = re.search(r"--" + re.escape(name) + r"\s+([0-9.eE+-]+)(?=\s|$)", text)
-    if match is None:
-        raise AssertionError(f"Missing explicit --{name} in launcher")
-    return float(match.group(1))
+def launcher_commands(model):
+    """Read the commands users will execute without creating a run or importing a model."""
+    bash = os.environ.get("BASH_BIN")
+    if not bash and os.name == "nt":
+        candidate = Path("C:/Program Files/Git/bin/bash.exe")
+        if candidate.is_file():
+            bash = str(candidate)
+    bash = bash or shutil.which("bash")
+    if not bash:
+        raise unittest.SkipTest("Bash is required to verify shell launchers")
+    with tempfile.TemporaryDirectory(prefix="launcher test ") as directory:
+        sandbox = Path(directory)
+        shutil.copytree(ROOT / "scripts", sandbox / "scripts")
+        env = {**os.environ, "DRY_RUN": "1", "RUN_TAG": "launcher-test", "PYTHON_BIN": "python"}
+        result = subprocess.run(
+            [bash, f"scripts/{model}.sh"], cwd=sandbox, env=env,
+            check=True, text=True, encoding="utf-8", capture_output=True, timeout=30,
+        )
+    commands = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        command = shlex.split(line)
+        if command[0] != "env" or not command[1].startswith("CUDA_VISIBLE_DEVICES="):
+            raise AssertionError(f"Unexpected launcher output: {line}")
+        if command[2:6] != ["python", "-u", "-m", "runners.baselines"]:
+            raise AssertionError(f"Unexpected launcher entrypoint: {line}")
+        argv = command[6:]
+        args = baseline.parser().parse_args(argv)
+        # The launcher must remain a CUDA command; validation does not need a real GPU.
+        with patch.object(torch.cuda, "is_available", return_value=True):
+            baseline.validate_args(args)
+        commands.append((int(command[1].split("=", 1)[1]), args, argv))
+    return commands
+
+
+def expected_launcher_arguments(model, dataset, seed, batch_size, result_dir):
+    """The complete effective baseline protocol, including intentional parser defaults."""
+    settings = dict(TIMESNET_SETTINGS)
+    if model != "TimesNet":
+        settings.update(MEDFORMER_EFFECTIVE_SETTINGS)
+    if model == "TimesNet" and dataset in ("apava", "shimmer10"):
+        settings["dropout"] = 0.3
+    settings.update({
+        "task_name": "classification", "model": model, "dataset": dataset,
+        "random_seed": seed, "batch_size": batch_size, "result_dir": result_dir,
+        "vendor_root": ROOT / "third_party" / ("timesnet" if model == "TimesNet" else "medformer"),
+        "checkpoint_metric": "window_macro_f1", "device": "cuda", "gpu": 0,
+        "patch_len_list": "2,4,8", "augmentations": "none", "swa": model == "Medformer",
+        "patch_len": 16, "stride": 8, "top_k": 3, "num_kernels": 6,
+        "progress": model == "TimesNet", "smoke": False, "smoke_samples_per_class": 2,
+    })
+    if model == "Medformer":
+        patch_settings = {
+            "adftd": ("2,4,8,8,16,16,16,16,32,32,32,32,32,32,32,32", "drop0.5"),
+            "tdbrain": ("8,8,8,16,16,16", "none,drop0.25"),
+            "apava": ("2,2,2,4,4,4,16,16,16,16,32,32,32,32,32", "none,drop0.35"),
+        }
+        settings["patch_len_list"], settings["augmentations"] = patch_settings.get(dataset, ("2,4,8", "none"))
+    return settings
 
 
 @contextlib.contextmanager
@@ -106,53 +165,53 @@ class TimesNetProtocolTests(unittest.TestCase):
                 self.assertEqual(timesnet.num_kernels, 6)
 
     def test_launcher_uses_four_datasets_three_seeds_and_unchanged_settings(self):
-        script = (ROOT / "scripts" / "TimesNet.sh").read_text(encoding="utf-8")
-        for name, expected in TIMESNET_SETTINGS.items():
-            self.assertEqual(script_numeric_setting(script, name), expected, name)
-        self.assertEqual(script_numeric_setting(script, "top_k"), 3)
-        self.assertEqual(script_numeric_setting(script, "num_kernels"), 6)
-        for name, expected in (
-            ("DATASETS", ["tdbrain", "apava", "shimmer10", "pads11"]),
-            ("SEEDS", ["42", "43", "44"]),
-            ("GPUS", ["0", "1", "2", "3"]),
-        ):
-            match = re.search(r"^" + name + r'=\"([^\"]+)\"\s*$', script, re.MULTILINE)
-            self.assertIsNotNone(match, name)
-            self.assertEqual(match.group(1).split(), expected, name)
-        for dataset, expected in (("tdbrain", 8), ("apava", 8), ("shimmer10", 1), ("pads11", 4)):
-            match = re.search(r"\[" + dataset + r"\]=(\d+)", script)
-            self.assertIsNotNone(match, dataset)
-            self.assertEqual(int(match.group(1)), expected, dataset)
-        self.assertIn("--progress", script)
+        datasets = {"tdbrain": (0, 8), "apava": (1, 8), "shimmer10": (2, 1), "pads11": (3, 4)}
+        commands = launcher_commands("TimesNet")
+        self.assertEqual(len(commands), 12)
+        self.assertCountEqual(
+            [(args.dataset, args.random_seed) for _, args, _ in commands],
+            [(dataset, seed) for dataset in datasets for seed in (42, 43, 44)],
+        )
+        self.assertEqual(len({args.result_dir for _, args, _ in commands}), 12)
+        for gpu, args, argv in commands:
+            with self.subTest(dataset=args.dataset, seed=args.random_seed):
+                expected_gpu, batch_size = datasets[args.dataset]
+                self.assertEqual(gpu, expected_gpu)
+                self.assertEqual(vars(args), expected_launcher_arguments(
+                    "TimesNet", args.dataset, args.random_seed, batch_size, args.result_dir,
+                ))
+                for name in (*TIMESNET_SETTINGS, "top_k", "num_kernels", "batch_size", "random_seed", "checkpoint_metric"):
+                    self.assertIn(f"--{name}", argv)
+                self.assertIn("launcher-test", args.result_dir.as_posix())
+                self.assertEqual(args.result_dir.name, args.dataset)
+                self.assertEqual(args.result_dir.parent.name, f"seed{args.random_seed}")
 
     def test_six_medformer_family_launchers_follow_upstream_effective_settings(self):
+        datasets = {"adftd": (0, 128), "tdbrain": (1, 32), "apava": (2, 32), "shimmer10": (3, 1), "pads11": (4, 4)}
         for model in OLD_MODELS:
             with self.subTest(model=model):
-                script = (ROOT / "scripts" / f"{model}.sh").read_text(encoding="utf-8")
-                for name, expected in MEDFORMER_EFFECTIVE_SETTINGS.items():
-                    self.assertEqual(script_numeric_setting(script, name), expected, name)
-                for dataset, expected in (
-                    ("adftd", 128), ("tdbrain", 32), ("apava", 32),
-                    ("shimmer10", 1), ("pads11", 4),
-                ):
-                    match = re.search(r"\[" + dataset + r"\]=(\d+)", script)
-                    self.assertIsNotNone(match, dataset)
-                    self.assertEqual(int(match.group(1)), expected, dataset)
-
-        medformer = (ROOT / "scripts" / "Medformer.sh").read_text(encoding="utf-8")
-        for expected in (
-            'patch_len_list="2,4,8,8,16,16,16,16,32,32,32,32,32,32,32,32"',
-            'augmentations="drop0.5"',
-            'patch_len_list="8,8,8,16,16,16"',
-            'augmentations="none,drop0.25"',
-            'patch_len_list="2,2,2,4,4,4,16,16,16,16,32,32,32,32,32"',
-            'augmentations="none,drop0.35"',
-            '--patch_len_list "$patch_len_list" --augmentations "$augmentations" --swa',
-        ):
-            self.assertIn(expected, medformer)
-        for model in OLD_MODELS:
-            script = (ROOT / "scripts" / f"{model}.sh").read_text(encoding="utf-8")
-            self.assertEqual("--swa" in script, model == "Medformer", model)
+                commands = launcher_commands(model)
+                self.assertEqual(len(commands), 15)
+                self.assertCountEqual(
+                    [(args.dataset, args.random_seed) for _, args, _ in commands],
+                    [(dataset, seed) for dataset in datasets for seed in (42, 43, 44)],
+                )
+                self.assertEqual(len({args.result_dir for _, args, _ in commands}), 15)
+                for gpu, args, argv in commands:
+                    with self.subTest(dataset=args.dataset, seed=args.random_seed):
+                        expected_gpu, batch_size = datasets[args.dataset]
+                        self.assertEqual(gpu, expected_gpu)
+                        self.assertEqual(vars(args), expected_launcher_arguments(
+                            model, args.dataset, args.random_seed, batch_size, args.result_dir,
+                        ))
+                        for name in (*TIMESNET_SETTINGS, "batch_size", "random_seed", "checkpoint_metric"):
+                            self.assertIn(f"--{name}", argv)
+                        if model == "Medformer":
+                            for option in ("--patch_len_list", "--augmentations", "--swa"):
+                                self.assertIn(option, argv)
+                        self.assertIn("launcher-test", args.result_dir.as_posix())
+                        self.assertEqual(args.result_dir.name, args.dataset)
+                        self.assertEqual(args.result_dir.parent.name, f"seed{args.random_seed}")
 
     def test_swa_is_medformer_only_and_opt_in(self):
         self.assertFalse(arguments("Medformer").swa)

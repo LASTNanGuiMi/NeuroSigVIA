@@ -10,12 +10,14 @@ launched together through `scripts/NeuroSigVIA.sh`.
 
 Shimmer and PADS use the subject IDs in `Meta/subject_map.csv`; the split audit
 written with each run records the original and mapped labels. The fixed
-data-split seed is 42 in both loaders. The current method scripts use training
-seeds 42, 43 and 44 by default. Edit `SEEDS` at the top of the method script
-to choose training seeds; this does not replace the fixed split seed.
+data-split seed is 42 in both loaders. The current method scripts explicitly
+list separate Python commands for training seeds 42, 43 and 44; these training
+seeds do not replace the fixed split seed.
 
-To run one wearable dataset on GPU 0, set `DATASETS="shimmer10"` or
-`DATASETS="pads11"` and `GPUS="0"` at the top of `scripts/NeuroSigVIA.sh`,
+To run one wearable dataset on GPU 0, retain the Shimmer10 or PADS11 dataset
+block in `scripts/NeuroSigVIA.sh` and set its
+`export CUDA_VISIBLE_DEVICES=0`. Remove or comment out the other complete
+subshell blocks together with their associated `PIDS+=("$!")` lines,
 then run from the repository root:
 
 ```bash
@@ -23,8 +25,11 @@ conda activate neurosigvia
 bash scripts/NeuroSigVIA.sh
 ```
 
-Choose an available GPU in the script. Training parameters are written in
-each method script, with per-dataset batch sizes in `BATCH_SIZES` at the top.
+Each dataset block runs its three seeds sequentially on the selected GPU;
+separate dataset blocks run concurrently. Training parameters, including
+`--batch_size`, are written out in each Python command. Edit all three
+commands to apply the same change to seeds 42/43/44. To omit a seed, remove
+or comment out its complete Python command and all continuation lines.
 If the compatible dataset wrapper is stored elsewhere, the optional
 `WEARABLE_DATA_ROOT` runtime setting can select its path. Results and cache
 paths are generated per run tag, training seed and dataset.
