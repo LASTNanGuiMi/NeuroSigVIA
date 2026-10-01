@@ -6,7 +6,7 @@ piecewise-mean waveforms before Activity Graph rendering, combines line-plot and
 Activity-Graph visual features with cross-attention, and aligns the resulting
 visual representation with frozen Mantis-8M temporal features.
 
-![NeuroSigVIA method overview](assets/neurosigvit_method.jpg)
+![NeuroSigVIA method overview](assets/neurosigvia_method.png)
 
 The current reproduction scripts support ADFTD, TDBRAIN, APAVA,
 `Shimmer_10_session10_AFC`, and `PADS_11_task08_TouchIndex`.
@@ -66,7 +66,7 @@ NeuroSigVIA/
 |   |-- experiment.py
 |   `-- split_reference_seed42.csv
 |-- assets/
-|   `-- neurosigvit_method.jpg
+|   `-- neurosigvia_method.png
 |-- scripts/
 |   |-- NeuroSigVIA.sh
 |   |-- Medformer.sh
