@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Shared scheduling/logging only. Model commands live in the seven method scripts.
+# 共用实验调度、GPU 锁和日志管理；各方法脚本负责组装模型命令。
 
+# 把简写名称映射到固定数据协议，批大小使用各方法脚本中的配置。
 configure_dataset() {
   DATA_ARGS=()
   case "$1" in
@@ -28,6 +29,7 @@ configure_dataset() {
   fi
 }
 
+# DRY_RUN 只打印展开后的命令，便于核对参数且不会启动训练。
 run_python() {
   if [[ "${DRY_RUN:-0}" == 1 ]]; then
     printf '%q ' env "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" "$PYTHON_BIN" -u "$@"
@@ -37,6 +39,7 @@ run_python() {
   fi
 }
 
+# 先写临时文件再原子替换，避免监控读取到只写了一半的状态。
 write_job_status() {
   local target="$1" state="$2" dataset="$3" seed="$4" gpu="$5" exit_code="$6"
   {
@@ -56,8 +59,9 @@ gpu_is_free() {
 run_worker() {
   local worker_index="$1" gpu="$2"; shift 2
   local idx dataset='' seed='' code status_file='' result cache log failures=0 child_pid=''
-  # A signal records an interrupted job and terminates only this worker's child.
+  # 收到中断信号时记录状态，仅终止当前工作进程启动的子任务。
   trap 'if [[ -n "$child_pid" ]]; then kill -TERM "$child_pid" 2>/dev/null || true; wait "$child_pid" 2>/dev/null || true; fi; if [[ -n "$status_file" ]]; then write_job_status "$status_file" INTERRUPTED "$dataset" "$seed" "$gpu" 143; fi; exit 143' TERM INT
+  # 文件锁协调使用同一锁目录的调度器；启动前仍需检查 GPU 实际占用。
   exec {lock_fd}>"$PROJECT_DIR/.aris/gpu_locks/gpu_$gpu.lock"
   if [[ "${WAIT_FOR_GPUS:-0}" == 1 ]]; then
     flock "$lock_fd"
@@ -81,7 +85,7 @@ run_worker() {
         write_job_status "$status_file" WAITING_FOR_GPU "$dataset" "$seed" "$gpu" ''
         until gpu_is_free "$gpu"; do sleep 15; done
       else
-        # CUDA contexts may take a few seconds to disappear after the last seed.
+        # 上一个种子结束后，CUDA 上下文可能延迟释放，先短暂重试。
         local attempt
         for attempt in {1..15}; do
           if gpu_is_free "$gpu"; then break; fi
@@ -126,6 +130,16 @@ run_experiments() {
   PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
   cd -- "$PROJECT_DIR"
   PYTHON_BIN="${PYTHON_BIN:-python}"
+  # 下列历史批次已交给并行调度器；保留接管逻辑以避免重复启动。
+  if [[ "${DRY_RUN:-0}" != 1 ]]; then
+    case "${RUN_TAG:-}" in
+      Autoformer_s42-43-44_20260907_211337|PatchTST_s42-43-44_20260907_211337|Transformer_s42-43-44_20260907_211337)
+        local handoff_code=0
+        "$PYTHON_BIN" "$PROJECT_DIR/.aris/expand_queue_20260908/handoff.py" --wait-method "$RUN_TAG" || handoff_code=$?
+        return "$handoff_code"
+        ;;
+    esac
+  fi
   read -r -a SEED_VALUES <<< "$SEEDS"
   read -r -a DATASET_KEYS <<< "$DATASETS"
   local gpu_list="$GPUS"
@@ -156,6 +170,7 @@ run_experiments() {
   seed_label="$(IFS=-; printf '%s' "${SEED_VALUES[*]}")"
   RUN_TAG="${RUN_TAG:-${METHOD}_s${seed_label}_$(date +%Y%m%d_%H%M%S)_$$}"
   [[ "$RUN_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { printf 'Invalid RUN_TAG\n' >&2; return 2; }
+  # 使用同一 RUN_TAG 隔离状态、日志、结果和缓存；已有目录会拒绝覆盖。
   STATUS_ROOT="$PROJECT_DIR/status/$RUN_TAG"
   LOG_ROOT="$PROJECT_DIR/logs/$RUN_TAG"
   RESULT_ROOT="$PROJECT_DIR/results/$RUN_TAG"
@@ -186,7 +201,7 @@ run_experiments() {
   mkdir -p -- "$LOG_ROOT" "$RESULT_ROOT" "$CACHE_ROOT" "$PROJECT_DIR/.aris/gpu_locks"
   git rev-parse HEAD > "$STATUS_ROOT/git_commit.txt"
   git diff --binary > "$STATUS_ROOT/tracked_changes.patch"
-  # Include newly added entrypoints/runner/vendor hashes, which git diff omits.
+  # git diff 不包含未跟踪文件，因此另外记录入口和依赖源码摘要。
   find scripts runners third_party -type f ! -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum > "$STATUS_ROOT/source_sha256.txt"
   sha256sum main.py src/datautils.py data_loading/experiment.py data_loading/datasets.py >> "$STATUS_ROOT/source_sha256.txt"
   {

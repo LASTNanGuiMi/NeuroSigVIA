@@ -184,8 +184,6 @@ activity_graph_samples/
 Mantis-8M/
 tmp_dataset_downloads/
 .claude/
-Extra/Mantis-8M/
-Extra/outputs/
 
 # Machine-local dataset links used by the experiment wrappers
 data/FallTL
@@ -196,24 +194,22 @@ data/Neuro/
 anonymous_artifact/
 anonymous_artifact.*
 
-.vscode/launch.json
-.vscode/settings.json
+.vscode/
 .idea/
 .DS_Store
 *.swp
 
 # Local experiment logs and downloaded datasets
-*.log
-*.zip
 *.zip*
-FallTL.zip*
-dataset.zip*
 
 # Server-only inputs, backups, and independent experiment snapshots
 /data/
 /backups/
 /experiment_snapshots/
 /Checkpoint/
+/saved_results/
+/former_results/
+/work/
 
 # Runtime queue state is local; these two directories contain required source.
 /status/

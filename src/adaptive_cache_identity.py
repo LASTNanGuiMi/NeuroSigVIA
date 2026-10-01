@@ -21,8 +21,11 @@ from typing import Mapping
 
 
 ADAPTIVE_STATIC_IDENTITY_SCHEME = "adaptive_static_ast_v1"
+# Re-pinned after src/patch_fusion.py received its current name: the hashed
+# extractor code is unchanged apart from that module name. Manifests written
+# before the rename record 91fe9280a339a4c75a9b309d8fe650897d440346e00f9e482e2d233da744a05e.
 KNOWN_COMPATIBLE_STATIC_AST_MANIFEST_SHA256 = (
-    "91fe9280a339a4c75a9b309d8fe650897d440346e00f9e482e2d233da744a05e"
+    "fc50519caeadc52424d5772e99346918607a3725f906ea88dcf5d8f03c048fb9"
 )
 KNOWN_LEGACY_ADAPTIVE_CACHE_COMMIT = (
     "97ade80e7519ab4f2f1d564dbacdd660c34919b5"
@@ -85,23 +88,23 @@ _KNOWN_LEGACY_COMPONENTS = (
 # eight component hashes.  Git commit 7f38ff7 contains the same source blobs;
 # the feature-producing functions differ from 97ade80 only by the mechanical
 # TimeMosaic/NeuroSigViT -> adaptive/NeuroSigVIA symbol rename.
-KNOWN_TIMEMOSAIC_CACHE_SOURCE_COMMIT = (
+KNOWN_ARCHIVED_CACHE_SOURCE_COMMIT = (
     "7f38ff72d21be2104d662ab8250f4021f33cf926"
 )
-KNOWN_TIMEMOSAIC_CACHE_LAUNCH_COMMIT = (
+KNOWN_ARCHIVED_CACHE_LAUNCH_COMMIT = (
     "b78892339093bae7e7defbbf0ec06f4023889bfb"
 )
-KNOWN_TIMEMOSAIC_CACHE_SCHEMA = 10
-KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE = (
+KNOWN_ARCHIVED_CACHE_SCHEMA = 10
+KNOWN_ARCHIVED_MODEL_ARCHITECTURE = (
     "timemosaic_adaptive_graph_crossattn_concatattn_v2"
 )
-KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE = (
+KNOWN_ARCHIVED_STATIC_CACHE_ARCHITECTURE = (
     "timemosaic_adaptive_graph_static_v1"
 )
-KNOWN_TIMEMOSAIC_CODE_MANIFEST_SHA256 = (
+KNOWN_ARCHIVED_CODE_MANIFEST_SHA256 = (
     "1c8d46c0d27314259525e7bc30d440c53ae3681779ebbaae01c45c55270935f3"
 )
-_KNOWN_TIMEMOSAIC_COMPONENTS = (
+_KNOWN_ARCHIVED_COMPONENTS = (
     (
         "src/neurosigvit.py",
         "2d9c576d46523b81ec054d4491bd6cdb073da41d82f148421b3a0f2126cd99e2",
@@ -148,12 +151,12 @@ _STATIC_AST_SPEC = {
             "preprocess_stacked_multichannel_lineplot",
         },
         # Only the constructor prefix can affect the frozen visual tokens.  The
-        # statements after ``med_activity_graph`` configure the online graph
+        # statements after ``multiscale_activity_graph`` configure the online graph
         # renderer and are intentionally outside the static-cache identity.
         "function_prefixes": {
             "get_neurosigvia": {
-                "argument_stop": "med_activity_patch_lengths",
-                "boundary_attribute": "med_activity_graph",
+                "argument_stop": "activity_graph_patch_lengths",
+                "boundary_attribute": "multiscale_activity_graph",
             },
         },
         "methods": {
@@ -189,7 +192,7 @@ _STATIC_AST_SPEC = {
         "constants": set(),
         "imports": {"F"},
     },
-    "src/patch_mindts.py": {
+    "src/patch_fusion.py": {
         "functions": {
             "make_temporal_patches",
             "_encode_visual_images",
@@ -270,17 +273,17 @@ def known_legacy_adaptive_code_identity() -> dict[str, object]:
     }
 
 
-def known_timemosaic_code_identity() -> dict[str, object]:
+def known_archived_code_identity() -> dict[str, object]:
     """Return the exact identity stored in the five archived seed-42 caches."""
 
     manifest = hashlib.sha256()
     components = {}
-    for relative_path, digest in _KNOWN_TIMEMOSAIC_COMPONENTS:
+    for relative_path, digest in _KNOWN_ARCHIVED_COMPONENTS:
         components[relative_path] = digest
         manifest.update(relative_path.encode("utf-8"))
         manifest.update(digest.encode("ascii"))
     actual = manifest.hexdigest()
-    if actual != KNOWN_TIMEMOSAIC_CODE_MANIFEST_SHA256:
+    if actual != KNOWN_ARCHIVED_CODE_MANIFEST_SHA256:
         raise RuntimeError("known TimeMosaic cache identity is internally corrupt")
     return {
         "manifest_sha256": actual,
@@ -588,14 +591,14 @@ __all__ = [
     "KNOWN_LEGACY_ADAPTIVE_CACHE_COMMIT",
     "KNOWN_LEGACY_ADAPTIVE_CACHE_SCHEMA",
     "KNOWN_LEGACY_ADAPTIVE_CODE_MANIFEST_SHA256",
-    "KNOWN_TIMEMOSAIC_CACHE_LAUNCH_COMMIT",
-    "KNOWN_TIMEMOSAIC_CACHE_SCHEMA",
-    "KNOWN_TIMEMOSAIC_CACHE_SOURCE_COMMIT",
-    "KNOWN_TIMEMOSAIC_CODE_MANIFEST_SHA256",
-    "KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE",
-    "KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE",
+    "KNOWN_ARCHIVED_CACHE_LAUNCH_COMMIT",
+    "KNOWN_ARCHIVED_CACHE_SCHEMA",
+    "KNOWN_ARCHIVED_CACHE_SOURCE_COMMIT",
+    "KNOWN_ARCHIVED_CODE_MANIFEST_SHA256",
+    "KNOWN_ARCHIVED_MODEL_ARCHITECTURE",
+    "KNOWN_ARCHIVED_STATIC_CACHE_ARCHITECTURE",
     "adaptive_static_extractor_code_identity",
     "assert_known_static_extractor_compatibility",
     "known_legacy_adaptive_code_identity",
-    "known_timemosaic_code_identity",
+    "known_archived_code_identity",
 ]

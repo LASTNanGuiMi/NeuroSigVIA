@@ -13,7 +13,7 @@ def embed(model, dataloader, model_type, channels, device):
         if model_type == "neurosigvia" and getattr(model, "image_mode", None) in {
             "multichannel_line_plot",
             "activity_graph",
-            "med_activity_graph",
+            "multiscale_activity_graph",
             "activity_matrix",
         }:
             with torch.no_grad():

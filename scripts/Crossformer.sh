@@ -186,7 +186,7 @@ python \
   --task_name classification \
   --model Crossformer \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 6 \
@@ -211,7 +211,7 @@ python \
   --task_name classification \
   --model Crossformer \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 6 \
@@ -236,7 +236,7 @@ python \
   --task_name classification \
   --model Crossformer \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 6 \

@@ -1,3 +1,5 @@
+# 本模块提供时序成像、视觉骨干加载及特征提取；训练入口为 runners/neurosigvia.py。
+# 张量记号：B 为样本数，T 为时间长度，C 为通道数，K 为候选粒度数，D 为特征维度。
 from abc import ABC, abstractmethod
 import os
 
@@ -33,6 +35,8 @@ OPENCLIP_LAION_MODELS = {
 }
 
 
+# 区分单尺度候选库与旧版混合尺度库，记录特征布局及基准候选位置。
+# 这些元信息用于解释候选轴，不在此处选择最优粒度。
 def _adaptive_granularity_metadata(base_patch_lengths, granularity_bank):
     """Resolve legacy-base metadata without rejecting single-scale banks."""
     if len(granularity_bank) < 2:
@@ -66,6 +70,7 @@ def build_single_column_graph(signals, id_list):
     return signals[np.asarray(id_list, dtype=np.int64)]
 
 
+# 按指定顺序将前一通道、当前通道、后一通道横向拼成一行；首尾循环连接。
 def build_multicolumn_graph(signals, id_list):
     signals = np.asarray(signals)
     if signals.ndim != 2:
@@ -81,6 +86,7 @@ def build_multicolumn_graph(signals, id_list):
     return np.stack(rows, axis=0)
 
 
+# 将一条信号插值到画布宽度，再把幅值映射为纵坐标并连接相邻点。
 def _draw_waveform(canvas, signal, x0, y0, width, height, value_min, value_max, line_width):
     signal = np.asarray(signal, dtype=np.float32)
     if signal.ndim != 1:
@@ -122,6 +128,7 @@ def _draw_waveform(canvas, signal, x0, y0, width, height, value_min, value_max, 
             canvas[y_start : y_end + 1, x0 + x] = 0.0
 
 
+# 单样本 NumPy 接口复用共享张量渲染器，输出单通道二维图像。
 def render_activity_waveform_graph(
     signals,
     mode="multicolumn",
@@ -161,6 +168,8 @@ def generate_activity_graph(signals, mode="multicolumn", id_list=None):
     raise ValueError(f"Unsupported activity graph mode {mode}.")
 
 
+# 统一单样本与批量输入，输出 [B,3,H,W]。
+# waveform 分支直接调用张量渲染器；matrix 分支经过 NumPy，不保留输入梯度。
 def preprocess_graph(signals, mode="multicolumn", img_size=224, render="waveform"):
     """
     signals: np.ndarray, shape (n, T), or torch.Tensor, shape (B, n, T)
@@ -243,6 +252,7 @@ LINE_PLOT_COLORS = np.asarray(
 )
 
 
+# 各通道叠画在同一坐标区域，使用整份样本共同的幅值范围和循环配色。
 def render_multichannel_lineplot(signals, img_size=224, line_width=1.0):
     """Overlay every channel as a colored line on one white RGB canvas."""
     signals = np.asarray(signals, dtype=np.float32)
@@ -273,6 +283,8 @@ def render_multichannel_lineplot(signals, img_size=224, line_width=1.0):
     return canvas
 
 
+# 每个通道独占固定纵向条带并独立缩放，以条带位置保留通道身份。
+# 非有限值由有效点插值；全无效或常数通道画在条带中线。
 def render_stacked_multichannel_lineplot(
     signals,
     img_size=224,
@@ -371,6 +383,7 @@ def render_stacked_multichannel_lineplot(
     ).clip(0.0, 1.0)
 
 
+# 普通叠加折线图的批量包装；转为 NumPy 渲染后恢复输出设备和数据类型。
 def preprocess_multichannel_lineplot(signals, img_size=224):
     """Render a batch of multichannel samples as ordinary RGB line plots."""
     device = signals.device if torch.is_tensor(signals) else None
@@ -408,7 +421,7 @@ def preprocess_multichannel_lineplot(signals, img_size=224):
 
 def preprocess_stacked_multichannel_lineplot(signals, img_size=224):
     """Render ``(channels, time)`` or ``(batch, channels, time)`` as lanes."""
-    # patch_mindts._line_images_for_chunk 调用：输入 [V,C,L_valid]，返回 [V,3,224,224]。
+    # patch_fusion._line_images_for_chunk 调用：输入 [V,C,L_valid]，返回 [V,3,224,224]。
     # 若只传 [C,L_valid]，会补 V=1 批轴；这里的 V 表示待编码内部块数。
     device = signals.device if torch.is_tensor(signals) else None
     if torch.is_tensor(signals) and signals.is_floating_point():
@@ -445,6 +458,7 @@ def preprocess_stacked_multichannel_lineplot(signals, img_size=224):
     return image_tensor.clamp(0.0, 1.0)
 
 
+# 将模型名称或本地目录的末级名称映射到受支持的 OpenCLIP 架构和预训练标签。
 def get_openclip_config(model_name):
     model_key = model_name.lower()
     model_key = os.path.basename(os.path.normpath(model_key))
@@ -455,6 +469,7 @@ def get_openclip_config(model_name):
     raise ValueError(f"Unsupported OpenCLIP model {model_name}.")
 
 
+# 先按常见权重文件名的优先级查找，再接受目录中的其他受支持权重文件。
 def find_openclip_checkpoint(model_dir):
     preferred_names = [
         "open_clip_pytorch_model.bin",
@@ -481,6 +496,8 @@ def find_openclip_checkpoint(model_dir):
     )
 
 
+# 根据模型名称加载图像预处理器及视觉骨干；CLIP 只取视觉部分。
+# 本地 OpenCLIP 目录会先解析权重文件，再交给 OpenCLIP 加载。
 def get_processor_vit(model_name):
     model_key = model_name.lower()
 
@@ -516,6 +533,8 @@ def get_processor_vit(model_name):
     return processor, vit
 
 
+# 模型工厂：加载视觉骨干，按实际结构选择 HF/OpenCLIP 包装，再配置活动图渲染器。
+# 这里负责视觉编码与候选粒度元信息；完整分类训练由训练模块组织。
 def get_neurosigvia(
     model_name,
     model_layer,
@@ -523,12 +542,12 @@ def get_neurosigvia(
     stride,
     patch_size,
     image_mode="line_plot",
-    med_activity_patch_lengths=(1,),
-    med_activity_channel_mix=0.35,
-    med_activity_router_temperature=0.2,
-    med_activity_router_mix=0.5,
-    med_activity_adaptive_granularity=False,
-    med_activity_granularity_bank=((4,), (8,), (16,)),
+    activity_graph_patch_lengths=(1,),
+    activity_graph_channel_mix=0.35,
+    activity_graph_router_temperature=0.2,
+    activity_graph_router_mix=0.5,
+    activity_graph_adaptive_granularity=False,
+    activity_graph_granularity_bank=((4,), (8,), (16,)),
 ):
     processor, vit = get_processor_vit(model_name)
 
@@ -550,20 +569,20 @@ def get_neurosigvia(
         stride=stride,
         image_mode=image_mode,
     )
-    neurosigvia.med_activity_graph = ActivityGraphRenderer(
-        patch_lengths=med_activity_patch_lengths,
-        channel_mix=med_activity_channel_mix,
-        router_temperature=med_activity_router_temperature,
-        router_mix=med_activity_router_mix,
+    neurosigvia.multiscale_activity_graph = ActivityGraphRenderer(
+        patch_lengths=activity_graph_patch_lengths,
+        channel_mix=activity_graph_channel_mix,
+        router_temperature=activity_graph_router_temperature,
+        router_mix=activity_graph_router_mix,
     )
 
-    base_patch_lengths = tuple(int(length) for length in med_activity_patch_lengths)
+    base_patch_lengths = tuple(int(length) for length in activity_graph_patch_lengths)
     granularity_bank = tuple(
         tuple(int(length) for length in regime)
-        for regime in med_activity_granularity_bank
+        for regime in activity_graph_granularity_bank
     )
     neurosigvia.adaptive_granularity_enabled = bool(
-        med_activity_adaptive_granularity
+        activity_graph_adaptive_granularity
     )
     neurosigvia.feature_granularity_count = 1
     neurosigvia.feature_granularity_labels = (
@@ -571,24 +590,24 @@ def get_neurosigvia(
     )
     neurosigvia.feature_granularity_base_index = 0
     neurosigvia.feature_layout = "single_embedding_v1"
-    neurosigvia.med_activity_granularity_bank = None
+    neurosigvia.activity_graph_granularity_bank = None
 
     if neurosigvia.adaptive_granularity_enabled:
-        if image_mode != "med_activity_graph":
+        if image_mode != "multiscale_activity_graph":
             raise ValueError(
                 "Adaptive granularity is only available with "
-                "image_mode='med_activity_graph'."
+                "image_mode='multiscale_activity_graph'."
             )
         base_index, feature_layout = _adaptive_granularity_metadata(
             base_patch_lengths,
             granularity_bank,
         )
-        neurosigvia.med_activity_granularity_bank = (
+        neurosigvia.activity_graph_granularity_bank = (
             TemporalGranularityGraphBank(
                 patch_length_bank=granularity_bank,
-                channel_mix=med_activity_channel_mix,
-                router_temperature=med_activity_router_temperature,
-                router_mix=med_activity_router_mix,
+                channel_mix=activity_graph_channel_mix,
+                router_temperature=activity_graph_router_temperature,
+                router_mix=activity_graph_router_mix,
             )
         )
         neurosigvia.feature_granularity_count = len(granularity_bank)
@@ -627,11 +646,13 @@ class BaseNeuroSigVIA(nn.Module, ABC):
         """Forward pass through ViT to extract hidden representations"""
         pass
 
+    # 按 image_mode 把时序转换为图像，再提取视觉 token 并聚合为特征。
+    # 输入轴顺序由所选成像分支决定，调用方需与该分支接口一致。
     def forward(self, inputs):
         if self.image_mode == "activity_graph":
             inputs = preprocess_graph(inputs, mode="multicolumn", render="waveform")
-        elif self.image_mode == "med_activity_graph":
-            inputs = self.med_activity_graph(inputs)
+        elif self.image_mode == "multiscale_activity_graph":
+            inputs = self.multiscale_activity_graph(inputs)
         elif self.image_mode == "multichannel_line_plot":
             inputs = preprocess_multichannel_lineplot(inputs)
         elif self.image_mode == "activity_matrix":
@@ -651,6 +672,8 @@ class BaseNeuroSigVIA(nn.Module, ABC):
             hidden, aggregation=self.aggregation
         )
 
+    # 依次编码各候选粒度，避免一次展开全部候选导致显存峰值过高。
+    # 输出 [B,K,D]：每个样本的 K 个候选各有一个 D 维向量，此处不执行门控选择。
     def forward_granularities(self, inputs):
         """Extract one frozen vision embedding per granularity-bank regime.
 
@@ -658,13 +681,13 @@ class BaseNeuroSigVIA(nn.Module, ABC):
         tensor so the peak memory of large ViTs stays close to the legacy
         single-graph path.  The returned layout is ``(batch, regimes, dim)``.
         """
-        if self.image_mode != "med_activity_graph":
+        if self.image_mode != "multiscale_activity_graph":
             raise ValueError(
-                "Granularity-bank extraction requires med_activity_graph mode."
+                "Granularity-bank extraction requires multiscale_activity_graph mode."
             )
         if not getattr(self, "adaptive_granularity_enabled", False):
             raise ValueError("Adaptive granularity is not enabled for this model.")
-        bank = getattr(self, "med_activity_granularity_bank", None)
+        bank = getattr(self, "activity_graph_granularity_bank", None)
         if bank is None:
             raise RuntimeError("Adaptive granularity bank is not initialized.")
 
@@ -709,6 +732,7 @@ class BaseNeuroSigVIA(nn.Module, ABC):
         """Map a pooled backbone state to the model's public embedding space."""
         return pooled
 
+    # 沿时间轴用中位数居中、四分位距缩放；小常数用于避免分母为零。
     def robust_scale(self, x):
         median = x.median(1, keepdim=True)[0]
         q_tensor = torch.tensor([0.75, 0.25], device=x.device, dtype=x.dtype)
@@ -717,6 +741,8 @@ class BaseNeuroSigVIA(nn.Module, ABC):
         iqr = q75 - q25
         return x / (iqr + 1e-5)
 
+    # 输入 [B,T,C]，逐通道绘制独立灰度折线图，并复制为三通道。
+    # 输出批量轴展开为 B*C；常数信号放在图像中线。
     def ts2line_plot_transformation(self, x, image_size=224, line_width=1.5):
         # x: B x T x D. Each channel is rendered as a separate white-background
         # black-line image so the embedding code can concatenate channel features.
@@ -763,6 +789,8 @@ class BaseNeuroSigVIA(nn.Module, ABC):
 
         return image_input
 
+    # 分段成像将一维序列折叠成二维纹理，再缩放至视觉骨干输入大小。
+    # 这里 stride 是块长的比例：1 表示不重叠，0 到 1 之间表示重叠；不是外层块步长的采样点数。
     def ts2image_transformation(
         self,
         x,
@@ -828,6 +856,7 @@ class NeuroSigVIA_HF(BaseNeuroSigVIA):
         )
         self.to_pil = T.ToPILImage()
 
+    # 按 layer_idx 截取前若干 Transformer 层；-1 保留全部层。
     def truncate_layers(self):
         if self.layer_idx and self.layer_idx != -1:
             if hasattr(self.vit.encoder, "layers"):
@@ -837,6 +866,7 @@ class NeuroSigVIA_HF(BaseNeuroSigVIA):
             else:
                 raise ValueError("Unknown model architecture cannot be truncated.")
 
+    # HF 路径先转 CPU/PIL 再调用 processor，此转换会切断图像输入端的梯度。
     def forward_vit(self, inputs):
         device = inputs.device
         # ToPILImage cannot convert CUDA tensors through NumPy.  Renderers may
@@ -856,6 +886,7 @@ class NeuroSigVIA_HF(BaseNeuroSigVIA):
 
 
 class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
+    # 保留预处理流水线最后的归一化步骤，图像尺寸由上游成像函数处理。
     def __init__(
         self, processor, vit, layer_idx, aggregation, patch_size, stride, image_mode
     ):
@@ -865,6 +896,7 @@ class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
         )
         self.processor.transforms = [self.processor.transforms[-1]]
 
+    # layer_idx 指保留的 Transformer 块数；None 或 -1 不截断。
     def truncate_layers(self):
         if self.layer_idx is not None and self.layer_idx != -1:
             self.vit.transformer.resblocks = self.vit.transformer.resblocks[
@@ -892,11 +924,11 @@ class NeuroSigVIA_OpenCLIP(BaseNeuroSigVIA):
             return torch.stack(hidden_states, dim=-1)
 
     def project_pooled_representation(self, pooled):
+        # 对最后一维执行 1280 -> 1024 投影：兼容静态 [V,1280] 和在线 [V,16,1280]。
         # OpenCLIP ViT-H/14 has transformer width 1280 and a learned 1024-D
         # output projection.  Applying the frozen post norm/projection makes
         # the implementation match NeuroSigVIA Eq. (5), while keeping the
         # selected intermediate transformer depth fixed.
-        # 对最后一维执行 1280 -> 1024 投影：兼容静态 [V,1280] 和在线 [V,16,1280]。
         if hasattr(self.vit, "ln_post"):
             pooled = self.vit.ln_post(pooled)
         projection = getattr(self.vit, "proj", None)

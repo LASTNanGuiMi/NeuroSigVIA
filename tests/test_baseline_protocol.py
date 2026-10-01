@@ -57,6 +57,116 @@ class TinyModel(torch.nn.Module):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_selection_default_and_tie_breaks(self):
+        args = baseline.parser().parse_args([
+            "--model", "Transformer", "--dataset", "apava", "--result_dir", "unused"])
+        self.assertEqual(args.checkpoint_metric, "window_macro_f1")
+        first = {"macro_f1": 0.75, "macro_log_loss": 0.8,
+                 "subject_macro_f1": 0.5, "subject_macro_log_loss": 0.8}
+        tied_better_log_loss = dict(first, macro_log_loss=0.1, subject_macro_log_loss=0.1)
+        self.assertEqual(baseline.checkpoint_selection_key(first, "window_macro_f1"),
+                         baseline.checkpoint_selection_key(tied_better_log_loss, "window_macro_f1"))
+        self.assertGreater(baseline.checkpoint_selection_key(tied_better_log_loss, "subject_macro_f1"),
+                           baseline.checkpoint_selection_key(first, "subject_macro_f1"))
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            baseline.checkpoint_selection_key(first, "test_macro_f1")
+
+    def test_window_subject_reverse_ranking_controls_checkpoint_scheduler_and_early_stop(self):
+        # Epoch A gets 6/8 windows right but both subject means wrong. Epoch B
+        # gets 2/8 windows right but both subject means right. These are actual
+        # probabilities, so the ranking difference is not a renamed JSON key.
+        y_true = np.repeat([0, 1], 4)
+        scores_a = np.array([[0.51, 0.49]] * 3 + [[0.01, 0.99]] +
+                            [[0.49, 0.51]] * 3 + [[0.99, 0.01]])
+        scores_b = np.array([[0.49, 0.51]] * 3 + [[0.99, 0.01]] +
+                            [[0.51, 0.49]] * 3 + [[0.01, 0.99]])
+
+        def predictions(scores, ids):
+            aggregated = baseline.aggregate_subjects(y_true, scores, ids)
+            values = baseline.metrics(y_true, scores)
+            values.update({"subject_" + key: value for key, value in baseline.metrics(
+                aggregated["subject_y_true"], aggregated["subject_y_score"]).items()})
+            arrays = {"y_true": y_true, "y_score": scores, "y_pred": scores.argmax(axis=1),
+                      "sample_subject_id": ids, **aggregated,
+                      "subject_y_pred": aggregated["subject_y_score"].argmax(axis=1)}
+            return values, arrays
+
+        rank_a, _ = predictions(scores_a, np.repeat([11, 12], 4))
+        rank_b, _ = predictions(scores_b, np.repeat([11, 12], 4))
+        self.assertGreater(rank_a["macro_f1"], rank_b["macro_f1"])
+        self.assertLess(rank_a["subject_macro_f1"], rank_b["subject_macro_f1"])
+        for mode, expected_best, expected_epochs in (("window_macro_f1", 1, 2),
+                                                     ("subject_macro_f1", 2, 3)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                # Omitting the option in the window case verifies the CLI default
+                # actually reaches the training loop and saved checkpoint.
+                command = ["--model", "Transformer", "--dataset", "apava", "--device", "cpu",
+                           "--result_dir", directory, "--train_epochs", "5", "--warmup_epochs", "0",
+                           "--batch_size", "4", "--patience", "1"]
+                if mode == "subject_macro_f1":
+                    command += ["--checkpoint_metric", mode]
+                args = baseline.parser().parse_args(command)
+                baseline.validate_args(args)
+                source = bundle()
+                for split in ("train", "vali", "test"):
+                    old = getattr(source, split + "_loader").dataset
+                    dataset = TensorDataset(old.tensors[0].repeat_interleave(2, dim=0))
+                    dataset.sample_subject_ids = np.repeat(old.sample_subject_ids, 2)
+                    setattr(source, split + "_loader", DataLoader(dataset, batch_size=4))
+                    setattr(source, split + "_labels", np.repeat(getattr(source, split + "_labels"), 2))
+                common = ModuleType("data_loading.experiment")
+                common.load_data = lambda key, smoke=False: (source, {"subject_overlap": [0, 0, 0]})
+                datautils = ModuleType("src.datautils")
+                def write_audit(_bundle, path):
+                    target = Path(path) / "split.csv"
+                    target.write_text("subject,split\n1,train\n11,vali\n21,test\n", encoding="utf-8")
+                    return target
+                datautils.write_eeg_medformer_split_audit = write_audit
+                datautils.write_wearable_split_audit = write_audit
+                validation_calls, test_calls, scheduler_values = [], [], []
+                def controlled_evaluate(model, loader, ids, device, num_classes):
+                    if np.min(ids) >= 21:
+                        test_calls.append(True)
+                        scores = scores_a if expected_best == 1 else scores_b
+                    else:
+                        validation_calls.append(True)
+                        if len(validation_calls) <= expected_epochs:
+                            scores = scores_a if len(validation_calls) % 2 else scores_b
+                        else:
+                            checkpoint = torch.load(Path(directory) / "best_checkpoint.pt",
+                                                    map_location="cpu", weights_only=True)
+                            scores = scores_a if checkpoint["epoch"] == 1 else scores_b
+                    return predictions(scores, ids)
+                with replace_modules({"data_loading.experiment": common, "src.datautils": datautils}), \
+                     patch.object(baseline, "import_model", return_value=TinyModel), \
+                     patch.object(baseline, "source_metadata", return_value={}), \
+                     patch.object(baseline, "evaluate", side_effect=controlled_evaluate), \
+                     patch.object(baseline.torch.optim.lr_scheduler, "ReduceLROnPlateau",
+                                  return_value=SimpleNamespace(step=scheduler_values.append)), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    baseline.run(args)
+                checkpoint = torch.load(Path(directory) / "best_checkpoint.pt", map_location="cpu", weights_only=True)
+                self.assertEqual(checkpoint["epoch"], expected_best)
+                final = json.loads((Path(directory) / "metrics.json").read_text(encoding="utf-8"))
+                self.assertEqual(final["best_epoch"], expected_best)
+                self.assertEqual(final["epochs_run"], expected_epochs)
+                self.assertEqual(final["test_evaluation_count"], 1)
+                self.assertEqual(len(test_calls), 1)
+                np.testing.assert_allclose(scheduler_values, [0.75, 0.25] if mode == "window_macro_f1" else [0, 1, 0])
+                for filename in ("metrics.json", "status.json", "protocol.json"):
+                    value = json.loads((Path(directory) / filename).read_text(encoding="utf-8"))
+                    self.assertEqual(value["evaluation_unit"], "window")
+                    self.assertEqual(value["supplementary_evaluation_unit"], "subject")
+                    self.assertEqual(value["checkpoint_metric"], "validation_" + mode)
+                    self.assertEqual(value["selection_unit"], mode.split("_")[0])
+                history = json.loads((Path(directory) / "history.json").read_text(encoding="utf-8"))
+                self.assertEqual([row["checkpoint_improved"] for row in history],
+                                 [True, False] if mode == "window_macro_f1" else [True, True, False])
+                for split in ("validation", "test"):
+                    with np.load(Path(directory) / f"{split}_predictions.npz", allow_pickle=False) as saved:
+                        self.assertEqual(saved["y_score"].shape, (8, 2))
+                        self.assertEqual(saved["subject_y_score"].shape, (2, 2))
+
     def test_subject_probability_mean_and_inconsistent_label_rejection(self):
         result = baseline.aggregate_subjects(np.array([0, 0, 0, 1]),
             np.array([[0.9, 0.1], [0.3, 0.7], [0.6, 0.4], [0.1, 0.9]]),

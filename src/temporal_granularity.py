@@ -155,6 +155,7 @@ class AdaptiveGranularityGate(nn.Module):
         target_keys = tuple(self.state_dict().keys())
         selected: dict[str, torch.Tensor] = {}
 
+        # 仅提取当前门控 MLP 的参数；兼容外层包装前缀，不载入整模型的其他权重。
         for source_key, value in source_state.items():
             if not isinstance(source_key, str) or not torch.is_tensor(value):
                 continue
@@ -197,6 +198,7 @@ class AdaptiveGranularityGate(nn.Module):
         classifier is training.  This makes a supplied pretrained gate a stable
         feature generator rather than a source of untrainable Gumbel noise.
         """
+        # 冻结同时关闭参数梯度和训练期随机路由，具体选路分支在 forward 中控制。
         self.gate_frozen = bool(frozen)
         for parameter in self.region_cls.parameters():
             parameter.requires_grad_(not self.gate_frozen)
@@ -238,10 +240,12 @@ class AdaptiveGranularityGate(nn.Module):
             raise RuntimeError(
                 "regions and AdaptiveGranularityGate must be on the same device"
             )
+        # 对每个通道的每个 16 点区域独立打分：[B,C,R,16] -> [B,C,R,3]。
         clean_logits = self.region_cls(regions.to(dtype=gate_parameter.dtype))
         # 最后一维依次对应块长 4、8、16；clean_probs 不含 Gumbel 噪声或温度缩放，供诊断/平衡项使用。
         clean_probs = F.softmax(clean_logits, dim=-1)
 
+        # 仅在训练且门控可训练时加入 Gumbel 噪声，并用温度调节软权重。
         if self.training and not self.gate_frozen:
             gumbel_noise = -torch.empty_like(clean_logits).exponential_(
                 generator=generator
@@ -253,8 +257,10 @@ class AdaptiveGranularityGate(nn.Module):
                 indices,
                 num_classes=len(self.granularities),
             ).to(dtype=soft_weights.dtype)
+            # 直通估计：前向为单一粒度的 one-hot，反向通过 soft_weights 更新门控。
             weights = hard_weights - soft_weights.detach() + soft_weights
         else:
+            # 评估或冻结时确定性取最大得分；硬选择本身不提供通向门控的梯度。
             route_logits = clean_logits
             indices = clean_logits.argmax(dim=-1)
             hard_weights = F.one_hot(
@@ -264,6 +270,7 @@ class AdaptiveGranularityGate(nn.Module):
             soft_weights = clean_probs
             weights = hard_weights
 
+        # 无效区域的各类权重全部清零，索引置为 -1；诊断张量仍保留已有计算图。
         # logits/probs/weights 均为 [B,C,R,3]；indices 和 region_valid_mask 为 [B,C,R]。
         # indices 的 0/1/2 是候选下标，须通过 granularities 映射为实际块长 4/8/16。
         valid_expanded = valid.unsqueeze(-1)

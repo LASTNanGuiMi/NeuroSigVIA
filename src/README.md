@@ -27,10 +27,10 @@ upstream reference and the boundaries of its adaptation.
 
 | Module | Responsibility |
 | --- | --- |
-| `activity_graph.py` | Graph row-order/weight primitives, fixed MedActivity image rendering and `TemporalGranularityGraphBank` |
+| `activity_graph.py` | Graph row-order/weight primitives, fixed multi-scale Activity Graph rendering and `TemporalGranularityGraphBank` |
 | `granularity_selector.py` | `AdaptiveTemporalGranularitySelector` for selecting among already encoded graph candidates in shared fusion paths |
 | `neurosigvia.py` | Visual encoder wrappers and image transforms |
-| `patch_mindts.py` | Window construction, frozen encoder helpers and cache utilities shared by the current path; also retains Patch-MindTS / Router fusion paths |
+| `patch_fusion.py` | Window construction, frozen encoder helpers and cache utilities shared by the current path; also retains the earlier post-encoding selector and Router fusion paths |
 | `mlp_classifier.py` | Shared `FusionModule`, MLP classifiers and feature-level training paths |
 | `classifier.py` | Classification metrics and conventional classifier helpers |
 | `embedding.py` | Shared feature extraction and concatenation |
@@ -44,9 +44,10 @@ upstream reference and the boundaries of its adaptation.
 The feature-level selector and graph bank remain shared implementation
 dependencies. They render and encode candidate graphs before selection;
 the current region gate selects activity maps before rendering. The
-`med_activity_graph` CLI value and existing class names remain available
-through these functional modules; there is no `medformer_graph` package or
-`med_activity_graph.py` re-export module.
+`multiscale_activity_graph` image mode and the `--activity_graph_*` options are
+served by these functional modules. Commands written with the earlier
+`med_activity_graph` value or `--med_activity_*` option names are still
+accepted and mapped by `compatibility.py`.
 
 The former root selector-comparison scripts, policy replacements and archived
 checkpoint-reproduction utilities have been removed. Existing shared fusion

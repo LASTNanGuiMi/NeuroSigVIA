@@ -13,11 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.adaptive_cache_identity import (
     KNOWN_COMPATIBLE_STATIC_AST_MANIFEST_SHA256,
     KNOWN_LEGACY_ADAPTIVE_CODE_MANIFEST_SHA256,
-    KNOWN_TIMEMOSAIC_CODE_MANIFEST_SHA256,
+    KNOWN_ARCHIVED_CODE_MANIFEST_SHA256,
     adaptive_static_extractor_code_identity,
     assert_known_static_extractor_compatibility,
     known_legacy_adaptive_code_identity,
-    known_timemosaic_code_identity,
+    known_archived_code_identity,
     _canonical_ast_dump,
 )
 
@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_SOURCE_PATHS = (
     "src/neurosigvia.py",
     "src/utils.py",
-    "src/patch_mindts.py",
+    "src/patch_fusion.py",
     "src/adaptive_graph_training.py",
     "runners/neurosigvia.py",
 )
@@ -57,8 +57,8 @@ class AdaptiveCacheIdentityTests(unittest.TestCase):
             KNOWN_LEGACY_ADAPTIVE_CODE_MANIFEST_SHA256,
         )
         self.assertEqual(
-            known_timemosaic_code_identity()["manifest_sha256"],
-            KNOWN_TIMEMOSAIC_CODE_MANIFEST_SHA256,
+            known_archived_code_identity()["manifest_sha256"],
+            KNOWN_ARCHIVED_CODE_MANIFEST_SHA256,
         )
 
     def test_ast_dump_omits_only_empty_cross_version_type_parameters(self):
@@ -82,7 +82,7 @@ class AdaptiveCacheIdentityTests(unittest.TestCase):
         before = self.identity()
         self.replace(
             "src/neurosigvia.py",
-            "channel_mix=med_activity_channel_mix,",
+            "channel_mix=activity_graph_channel_mix,",
             "channel_mix=0.987654321,",
         )
         self.assertEqual(self.identity(), before)
@@ -126,7 +126,7 @@ class AdaptiveCacheIdentityTests(unittest.TestCase):
     def test_constructor_boundary_removal_fails_closed(self):
         self.replace(
             "src/neurosigvia.py",
-            "neurosigvia.med_activity_graph = ActivityGraphRenderer(",
+            "neurosigvia.multiscale_activity_graph = ActivityGraphRenderer(",
             "neurosigvia.online_graph = ActivityGraphRenderer(",
         )
         with self.assertRaisesRegex(RuntimeError, "constructor prefix"):

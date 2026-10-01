@@ -155,7 +155,7 @@ def load_reference(reference_run_path, seed: int, dataset: str) -> dict:
     from data_loading.experiment import load_data
     from runners.neurosigvia import _split_input_identity
     from src.adaptive_graph_training import load_adaptive_graph_feature_cache
-    from src.patch_mindts import _labels_to_indices, _map_labels, _subject_ids_digest
+    from src.patch_fusion import _labels_to_indices, _map_labels, _subject_ids_digest
 
     bundle, data_manifest = load_data(dataset, smoke=False)
     input_identity = _split_input_identity(

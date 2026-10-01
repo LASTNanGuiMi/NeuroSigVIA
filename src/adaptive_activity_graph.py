@@ -136,6 +136,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
         valid = sample_valid_mask[:, None, :]
         finite = torch.nan_to_num(signals, nan=0.0, posinf=0.0, neginf=0.0)
         masked = finite.masked_fill(~valid, float("nan"))
+        # 仅对门控输入做逐通道稳健归一化；统计量忽略填充，候选绘图波形保留原始幅值。
         center = torch.nanquantile(masked, 0.5, dim=-1, keepdim=True)
         deviations = finite - center
         absolute_deviations = deviations.abs().masked_fill(~valid, float("nan"))
@@ -148,6 +149,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             dim=-1, keepdim=True
         ) / counts
         std = variance.clamp_min(1e-12).sqrt()
+        # 中位绝对偏差过小时退回标准差，防止近常值通道出现不稳定缩放。
         scale = torch.where(mad > 1e-6, mad, std.clamp_min(1e-6))
         normalized = torch.nan_to_num(
             deviations / scale,
@@ -165,6 +167,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
     ) -> torch.Tensor:
         """Average each temporal block and restore a 16-point waveform lane."""
 
+        # 在每个 16 点区域内按给定粒度求有效样本均值，再重复展开为 16 点阶梯波形。
         # [M,C,R,16] -> [M,C,R,16/g,g] -> 均值 [M,C,R,16/g] -> [M,C,R,16]。
         # g=4/8/16 时每区分别有 4/2/1 个均值；选择后仍保留 16 点长度，未减少外层 patch 数。
         subpatch_count = regions.shape[-1] // granularity
@@ -218,6 +221,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
         sample_valid_mask = time_axis.unsqueeze(0) < lengths.unsqueeze(1)
         gate_input = self._normalize_gate_input(working, sample_valid_mask)
 
+        # 补齐最后一个 16 点区域，同时扩展布尔掩码，补入的零不参与均值和路由有效性判断。
         region_count = (original_time_steps + self.region_length - 1) // self.region_length
         # 64 点外层 patch 对应 R=4，无需补齐；若直接调用本类处理其他长度，则 R=ceil(T/16)。
         padded_time = region_count * self.region_length
@@ -229,6 +233,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
                 sample_valid_mask, (0, pad_width), value=False
             )
 
+        # 候选波形和门控分别使用原幅值、归一化输入，二者都重排为 [B,C,R,16]。
         regions = working.reshape(
             working.shape[0], working.shape[1], region_count, self.region_length
         )
@@ -248,6 +253,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             generator=generator,
         )
 
+        # 三种粒度的候选波形堆叠为 [B,C,R,K,16]，K 与门控输出的粒度顺序一致。
         # TDBRAIN 64 点外层 patch 的候选形状为 [M,33,4,3,16]，不是三张已经编码的图像。
         candidates = torch.stack(
             [
@@ -259,6 +265,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             dim=3,
         )
         selection_weights = gate_diagnostics["weights"].to(dtype=candidates.dtype)
+        # 按区域权重选择波形；保留 weights 的计算图，使训练期直通估计可把梯度传回门控。
         selected_regions = torch.einsum(
             "bcrk,bcrkt->bcrt", selection_weights, candidates
         )
@@ -270,6 +277,7 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             ~sample_valid_mask[:, None, :original_time_steps], 0.0
         )
 
+        # 先完成粒度选择，再套用统一的论文布局渲染，输出 [B,3,img_size,img_size]。
         # img_size 默认 224，因而通常得到 [M,3,224,224]；RGB 的 3 与 EEG 的 33 个通道不同。
         # 下游在此图像上保留梯度通过冻结 OpenCLIP，以便训练预渲染门控。
         image = render_paper_activity_graph(

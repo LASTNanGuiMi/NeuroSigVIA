@@ -1,7 +1,6 @@
 import csv
 import hashlib
 import importlib.util
-import json
 import os
 import re
 import sys
@@ -155,14 +154,15 @@ EEG_MEDFORMER_SPECS = {
         "content_sha256": (
             "96984c06c5d5d41e62b2dc751733c78f67002e990f6c7dc421f155b32dfaf0d6"
         ),
-        "protocol": "medformer_code_exact_apava_subject_split",
+        # 0917 新划分：random.Random(20260917) 按类别分层抽取受试者，见 .aris/apava_resplit_20260917_r1/split_plan.json。
+        "protocol": "apava_subject_stratified_resplit_20260917",
         "split_ids": {
-            "train": tuple(range(3, 15)) + (21, 22, 23),
-            "vali": (15, 16, 19, 20),
-            "test": (1, 2, 17, 18),
+            "train": (1, 2, 4, 5, 8, 10, 11, 13, 15, 17, 18, 19, 20, 21, 22),
+            "vali": (6, 7, 12, 14),
+            "test": (3, 9, 16, 23),
         },
         "expected_subject_counts": {"train": 15, "vali": 4, "test": 4},
-        "expected_window_counts": {"train": 3123, "vali": 1413, "test": 1431},
+        "expected_window_counts": {"train": 4536, "vali": 909, "test": 522},
     },
     "ADFTD": {
         "channels": 19,
@@ -277,7 +277,6 @@ class EEGMedformerBundle:
     test_loader: DataLoader
     test_labels: np.ndarray
     normalization: str = EEG_MEDFORMER_NORMALIZATION
-    subject_subset_manifest: dict | None = None
 
 
 @dataclass
@@ -1327,6 +1326,7 @@ def find_eeg_medformer_data_root(data_dir, dataset_name):
     )
 
 
+# 核对标签摘要、文件编号、窗口形状和固定受试者名单，防止加载到不同版本的数据。
 def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
     # 返回 EEGMedformerInventory 元数据对象；不将所有受试者窗口拼成训练张量。
     # TDBRAIN 标签表 [72,2] 的列顺序为 [class_id, legacy_subject_id]。
@@ -1376,6 +1376,7 @@ def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
             raise ValueError(f"Duplicate {dataset_name} feature ID: {subject_id}")
         feature_by_id[subject_id] = path.resolve()
 
+    # 用受试者编号匹配特征与标签，不依赖文件遍历顺序。
     if set(feature_by_id) != set(label_by_id):
         raise ValueError(
             f"{dataset_name} feature/label subject mismatch: "
@@ -1414,6 +1415,7 @@ def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
         split: tuple(int(value) for value in ids)
         for split, ids in spec["split_ids"].items()
     }
+    # 检查固定划分互斥；排除的受试者也必须与协议记录一致。
     assigned = [value for ids in split_ids.values() for value in ids]
     if len(assigned) != len(set(assigned)):
         raise ValueError(f"{dataset_name} subject leakage detected between splits.")
@@ -1456,6 +1458,7 @@ def get_eeg_medformer_inventory(data_dir, dataset_name, verify_content=True):
     )
 
 
+# EEG 按每个原始窗口、每个通道独立标准化，沿时间轴计算总体标准差（ddof=0）。
 def _normalize_eeg_medformer_windows(windows):
     # 输入/输出均为 [N_s,T,C]；TDBRAIN T=256,C=33，输出 dtype=float32。
     # 每个窗口独立处理，mean/std 是 [N_s,1,33]，没有跨窗口或跨受试者拟合。
@@ -1473,12 +1476,13 @@ def _normalize_eeg_medformer_windows(windows):
     return normalized
 
 
-def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subject_ids=None):
+def _make_eeg_medformer_split_loader(inventory, split, batch_size):
     # TDBRAIN 的 split 总窗口数 S 分别为 train=4320、vali=960、test=960。
     # 函数返回 (DataLoader, labels[S])；loader 的每项只有输入张量，标签单独传递。
     spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
     record_by_id = {record.subject_id: record for record in inventory.records}
     subject_ids = inventory.split_ids[split]
+    # 保留选中受试者的全部窗口，并核对该集合的预期窗口总数。
     total_windows = sum(record_by_id[value].window_count for value in subject_ids)
     expected_windows = spec["expected_window_counts"][split]
     if total_windows != expected_windows:
@@ -1486,12 +1490,6 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
             f"{inventory.dataset_name} {split} window count mismatch: "
             f"{total_windows}; expected {expected_windows}."
         )
-
-    if selected_subject_ids is not None:
-        if not set(selected_subject_ids).issubset(subject_ids) or len(selected_subject_ids) != len(set(selected_subject_ids)):
-            raise ValueError("Subject subset changes source split or repeats subjects")
-        subject_ids = tuple(selected_subject_ids)
-        total_windows = sum(record_by_id[value].window_count for value in subject_ids)
 
     inputs = np.empty(
         (total_windows, spec["channels"], 256), dtype=np.float32
@@ -1506,6 +1504,7 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
         source = np.load(record.feature_path, mmap_mode="r", allow_pickle=False)
         normalized = _normalize_eeg_medformer_windows(source)
         next_cursor = cursor + record.window_count
+        # 原始 [窗口数, 时间, 通道] 转为模型输入 [窗口数, 通道, 时间]。
         inputs[cursor:next_cursor] = normalized.transpose(0, 2, 1)
         labels[cursor:next_cursor] = record.label
         sample_subject_ids[cursor:next_cursor] = subject_id
@@ -1518,6 +1517,7 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
     # 单条 dataset[i][0] 为 [33,256]；一个 batch[0] 为 [B,33,256]。
     # 当前 NeuroSigVIA.sh 为 TDBRAIN 设 B=8；这不是分类内部 64 点块的数量。
     tensor_dataset.sample_subject_ids = sample_subject_ids
+    # 保存窗口在原受试者文件中的位置，供划分审计与预测回溯使用。
     tensor_dataset.sample_window_indices = sample_window_indices
     tensor_dataset.split_name = split
     loader = DataLoader(
@@ -1530,7 +1530,7 @@ def _make_eeg_medformer_split_loader(inventory, split, batch_size, selected_subj
     return loader, labels
 
 
-def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None):
+def get_eeg_medformer_dataloaders(dataset_name, args):
     # 主方法 EEG 入口调用链：inventory -> 三次 split_loader -> EEGMedformerBundle。
     # TDBRAIN: X_train[4320,33,256], X_val/X_test[960,33,256]；y 均为一维 int64。
     protocol = getattr(args, "eeg_protocol", "medformer_code_exact")
@@ -1545,18 +1545,14 @@ def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None
     inventory = get_eeg_medformer_inventory(
         args.data_dir, dataset_name, verify_content=True
     )
-    from src.eeg_subject_subset import build_subject_subset, subject_subset_metadata
-    subset_manifest, selected = build_subject_subset(inventory, subject_subset_config)
-    if subset_manifest is not None:
-        args.adftd_subject_subset = subject_subset_metadata(subset_manifest)
     train_loader, train_labels = _make_eeg_medformer_split_loader(
-        inventory, "train", args.batch_size, None if selected is None else selected["train"]
+        inventory, "train", args.batch_size
     )
     vali_loader, vali_labels = _make_eeg_medformer_split_loader(
-        inventory, "vali", args.batch_size, None if selected is None else selected["vali"]
+        inventory, "vali", args.batch_size
     )
     test_loader, test_labels = _make_eeg_medformer_split_loader(
-        inventory, "test", args.batch_size, None if selected is None else selected["test"]
+        inventory, "test", args.batch_size
     )
     bundle = EEGMedformerBundle(
         inventory=inventory,
@@ -1566,7 +1562,6 @@ def get_eeg_medformer_dataloaders(dataset_name, args, subject_subset_config=None
         vali_labels=vali_labels,
         test_loader=test_loader,
         test_labels=test_labels,
-        subject_subset_manifest=subset_manifest,
     )
 
     distributions = []
@@ -1597,15 +1592,6 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
     inventory = bundle.inventory
     output_path = split_dir / f"{inventory.dataset_name}_subject_split.csv"
     spec = EEG_MEDFORMER_SPECS[inventory.dataset_name]
-    subset = bundle.subject_subset_manifest
-    selected_ids = set()
-    if subset is not None:
-        subset_path = Path(result_dir) / f"{inventory.dataset_name}_subject_subset_manifest.json"
-        subset_path.write_text(json.dumps(subset, indent=2, allow_nan=False) + "\n", encoding="utf-8")
-        from src.eeg_subject_subset import subject_subset_metadata
-        protocol_path = Path(result_dir) / f"{inventory.dataset_name}_subject_subset_protocol.json"
-        protocol_path.write_text(json.dumps(subject_subset_metadata(subset), indent=2, allow_nan=False) + "\n", encoding="utf-8")
-        selected_ids = {sid for values in subset["splits"].values() for sid in values["selected_subject_ids"]}
     split_by_id = {}
     for split, subject_ids in inventory.split_ids.items():
         for subject_id in subject_ids:
@@ -1626,10 +1612,7 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
                 "split",
                 "label_sha256",
                 "aggregate_content_sha256",
-            ] + ([] if subset is None else [
-                "source_split", "source_window_count", "selected_subject",
-                "subset_selection_unit", "subset_selection_seed", "subset_manifest_sha256",
-            ])
+            ]
         )
         for record in inventory.records:
             writer.writerow(
@@ -1641,15 +1624,11 @@ def write_eeg_medformer_split_audit(bundle, result_dir):
                     record.subject_id,
                     record.label,
                     spec["class_names"][record.label],
-                    record.window_count if subset is None or record.subject_id in selected_ids else 0,
-                    split_by_id.get(record.subject_id, "excluded") if subset is None or record.subject_id in selected_ids else "excluded_subject_subset",
+                    record.window_count,
+                    split_by_id.get(record.subject_id, "excluded"),
                     inventory.label_sha256,
                     inventory.content_sha256,
-                ] + ([] if subset is None else [
-                    split_by_id.get(record.subject_id, "excluded"), record.window_count,
-                    int(record.subject_id in selected_ids), "subject",
-                    subset["selection_seed"], subset["manifest_sha256"],
-                ])
+                ]
             )
     return output_path
 
@@ -1736,7 +1715,7 @@ def _make_wearable_tensor_loader(source_dataset, batch_size):
     if source_dataset.X is None or source_dataset.y is None:
         raise ValueError("Wearable source dataset did not load samples")
 
-    # The reference interface is [N,T,6]; NeuroSigVIA consumes [N,6,T].
+    # 可穿戴参考加载器输出 [N,T,6]，模型接收 [N,6,T]；样本顺序不变。
     inputs = torch.from_numpy(source_dataset.X.transpose(0, 2, 1))
     tensor_dataset = TensorDataset(inputs)
     tensor_dataset.source_dataset = source_dataset
@@ -1753,6 +1732,7 @@ def _make_wearable_tensor_loader(source_dataset, batch_size):
 
 def _standardize_wearable_bundle_from_train(bundle, batch_size):
     """Standardize selected task channels with training-split statistics only."""
+    # 可穿戴数据仅用训练集估计各通道统计量，再应用于验证集和测试集。
     train_data = bundle.train_loader.dataset.tensors[0]
     mean = train_data.mean(dim=(0, 2), keepdim=True)
     std = train_data.std(dim=(0, 2), unbiased=False, keepdim=True)
@@ -1778,6 +1758,7 @@ def _standardize_wearable_bundle_from_train(bundle, batch_size):
 
 def _apply_wearable_label_protocol(bundle, label_mode, batch_size):
     family = "shimmer" if bundle.dataset_name.startswith("Shimmer_") else "pads"
+    # Shimmer 合并两种 PD 严重程度；PADS 按任务筛选目标类别并重编码。
     protocols = {
         "shimmer_hc_vs_pd": ("shimmer", {0: 0, 1: 1, 2: 1}),
         "pads_pd_vs_hc": ("pads", {0: 0, 1: 1}),
@@ -1953,6 +1934,7 @@ def get_wearable_dataloaders(dataset_name, args):
     reference_status = _validate_wearable_bundle(bundle, reference_module)
 
     label_mode = getattr(args, "wearable_label_mode", "original")
+    # 先按任务筛选样本，再计算训练集统计量，避免无关类别影响归一化。
     _apply_wearable_label_protocol(bundle, label_mode, args.batch_size)
     _standardize_wearable_bundle_from_train(bundle, args.batch_size)
 
