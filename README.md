@@ -76,11 +76,7 @@ NeuroSigVIA/
 |-- scripts/
 |   |-- NeuroSigVIA.sh
 |   |-- Medformer.sh
-|   |-- Crossformer.sh
-|   |-- FEDformer.sh
-|   |-- Autoformer.sh
 |   |-- PatchTST.sh
-|   |-- Transformer.sh
 |   |-- TimesNet.sh
 |   |-- TeCh.sh
 |   |-- TiViT_FrozenBackbone.sh
@@ -239,8 +235,8 @@ their implementation boundaries.
 Each method script lists every dataset and seed as a separate multiline
 `python -u -m ...` command, with one argument per line. A dataset block is a
 subshell with its own `export CUDA_VISIBLE_DEVICES`; its seed 42, 43 and 44
-commands run sequentially, while dataset blocks run in parallel. NeuroSigVIA
-and the six Medformer-family scripts cover all five datasets; TimesNet and
+commands run sequentially, while dataset blocks run in parallel. NeuroSigVIA,
+`Medformer.sh` and `PatchTST.sh` cover all five datasets; TimesNet and
 the ablation scripts cover the four non-ADFTD datasets:
 
 ```bash
@@ -248,7 +244,7 @@ conda activate neurosigvia
 bash scripts/NeuroSigVIA.sh
 ```
 
-The seven comparison entries are `Medformer.sh`, `Crossformer.sh`, `FEDformer.sh`, `Autoformer.sh`, `PatchTST.sh`, `Transformer.sh`, and `TimesNet.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. The first six model implementations are copied unchanged from Medformer into `third_party/medformer/`; TimesNet is copied from the official Time-Series-Library into `third_party/timesnet/`. Both vendor directories retain their MIT license, pinned commit and per-file hashes. Install the additional Medformer import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
+The comparison entries trained by `runners/baselines.py` are `Medformer.sh`, `PatchTST.sh` and `TimesNet.sh`, all in `scripts/`. Run one method at a time on the chosen GPUs. The Medformer and PatchTST model implementations are copied unchanged from Medformer into `third_party/medformer/`; TimesNet is copied from the official Time-Series-Library into `third_party/timesnet/`. Both vendor directories retain their MIT license, pinned commit and per-file hashes. Install the additional Medformer import dependency with `python -m pip install -r third_party/medformer/requirements.txt`.
 
 After activating the environment, run TimesNet with:
 
@@ -281,7 +277,7 @@ architecture. See
 [TimesNet integration](third_party/timesnet/INTEGRATION.md) for verification and
 interpreter examples.
 
-The other six baseline launchers follow the effective configurations selected
+The Medformer and PatchTST launchers follow the effective configurations selected
 by Medformer's `scripts/classification` at pinned source commit `446275f`:
 `d_model=128`, `d_ff=256`, six encoder layers, learning rate `1e-4`, at most 100
 epochs and patience 10, plus the upstream defaults of eight heads and dropout
@@ -292,7 +288,7 @@ upstream directory has no Shimmer10 or PADS11 entries, so those two retain local
 batch sizes 1/4 and the Medformer fallback `2,4,8` plus no augmentation; these
 fallback values are not claimed as upstream settings.
 
-NeuroSigVIA and the six Medformer-family scripts assign GPUs 0/1/2/3/4 to ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each dataset processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
+NeuroSigVIA, `Medformer.sh` and `PatchTST.sh` assign GPUs 0/1/2/3/4 to ADFTD/TDBRAIN/APAVA/Shimmer/PADS respectively. Each dataset processes seeds 42, 43 and 44 sequentially. The command waits for the full method batch; use tmux when disconnecting SSH:
 
 ```bash
 tmux new-session -s neurosigvia
@@ -326,9 +322,9 @@ free, with status `WAITING_FOR_GPU`.
 
 Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and job-status files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, retain only their explicit commands in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
-APAVA uses the 0917 subject-stratified resplit (`split_seed=20260917`) and the other four datasets keep their fixed subject assignments (`split_seed=42`); all keep their normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself uses batch sizes 8/8/8/1/16 and its existing early stopping. It selects checkpoints by validation window Macro-F1, except on Shimmer10, where `--patch_checkpoint_metric subject_macro_f1` is used: every Shimmer10 subject contributes one recording, so the two scores coincide and only the tie-break differs (lowest validation subject log-loss, then earliest epoch); the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter uses AdamW, balanced cross entropy, ReduceLROnPlateau, explicitly selected validation window Macro-F1, supplementary mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
+APAVA uses the 0917 subject-stratified resplit (`split_seed=20260917`) and the other four datasets keep their fixed subject assignments (`split_seed=42`); all keep their normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself uses batch sizes 8/8/8/1/16 and its existing early stopping. It selects checkpoints by validation window Macro-F1, except on Shimmer10, where `--patch_checkpoint_metric subject_macro_f1` is used: every Shimmer10 subject contributes one recording, so the two scores coincide and only the tie-break differs (lowest validation subject log-loss, then earliest epoch); the Medformer and PatchTST launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter uses AdamW, balanced cross entropy, ReduceLROnPlateau, explicitly selected validation window Macro-F1, supplementary mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
-The six Medformer-family scripts transfer the upstream classification-shell
+The Medformer and PatchTST scripts transfer the upstream classification-shell
 settings into NeuroSigVIA's fixed data and evaluation protocol; this is not a
 copy of the upstream training loop and not a claim about published scores.
 TimesNet remains a separately sourced configuration. Keep hyperparameter changes
@@ -414,8 +410,8 @@ old graph-model checkpoints are invalidated by the new graph implementation.
 
 ### Source modules
 
-Current method components are organized by function. The Medformer baseline
-and the other five baseline implementations are under `third_party/medformer/`.
+Current method components are organized by function. The Medformer and PatchTST
+baseline implementations are under `third_party/medformer/`.
 The official TimesNet model and its required layers are under `third_party/timesnet/`.
 
 | Entry | Purpose |
@@ -427,7 +423,7 @@ The official TimesNet model and its required layers are under `third_party/times
 | `src/line_graph_cross_attention.py` | Pooled line Query and Activity Graph spatial Key/Value cross-attention |
 | `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
-| `scripts/NeuroSigVIA.sh` and seven baseline method scripts | Explicit commands for three seeds; TimesNet covers four non-ADFTD datasets, other scripts cover five |
+| `scripts/NeuroSigVIA.sh`, `Medformer.sh`, `PatchTST.sh`, `TimesNet.sh` | Explicit commands for three seeds; TimesNet covers four non-ADFTD datasets, other scripts cover five |
 | `scripts/Ablation_wo_Visual.sh` and the other `Ablation_*` / `TeCh.sh` / `TiViT_FrozenBackbone.sh` launchers | Explicit commands for the branch, encoder, fusion, imaging, depth and granularity experiments on four datasets and three seeds |
 | `third_party/timesnet/` | Pinned official TimesNet model, required layers, MIT license and integration notes |
 | `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |

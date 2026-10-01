@@ -14,7 +14,7 @@ from sklearn.metrics import (
 METRICS = ("accuracy", "macro_precision", "macro_recall", "macro_f1", "macro_auroc", "macro_auprc")
 DATASETS = ("shimmer10", "pads11", "apava", "tdbrain")
 RUNS = {name: f"{name}_s42-43-44_20260907_211337" for name in
-        ("Medformer", "Autoformer", "FEDformer", "PatchTST", "Transformer", "Crossformer")}
+        ("Medformer", "PatchTST")}
 RUNS.update(TimesNet="TimesNet_s42-43-44_20260908_035053",
             NeuroSigVIA="NeuroSigVIA_paperAG_s42-43-44_20260908_003550",
             NumericNoFusion="NeuroSigVIA_NumericOnly_NoFusion_s42-43-44_20260908_r1")

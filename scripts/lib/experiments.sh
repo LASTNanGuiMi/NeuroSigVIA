@@ -133,7 +133,7 @@ run_experiments() {
   # 下列历史批次已交给并行调度器；保留接管逻辑以避免重复启动。
   if [[ "${DRY_RUN:-0}" != 1 ]]; then
     case "${RUN_TAG:-}" in
-      Autoformer_s42-43-44_20260907_211337|PatchTST_s42-43-44_20260907_211337|Transformer_s42-43-44_20260907_211337)
+      PatchTST_s42-43-44_20260907_211337)
         local handoff_code=0
         "$PYTHON_BIN" "$PROJECT_DIR/.aris/expand_queue_20260908/handoff.py" --wait-method "$RUN_TAG" || handoff_code=$?
         return "$handoff_code"

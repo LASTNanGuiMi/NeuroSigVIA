@@ -61,8 +61,7 @@ and TeCh replacements.
   subject Macro-F1 have the same value and the rules differ in the tie-break.
 - **Runs from a second machine.** 42 records were produced on another machine
   and copied here.
-- **Scope.** `scripts/NeuroSigVIA.sh` and the seven baseline launchers also
-  list ADFTD, and launchers exist for Crossformer, FEDformer, Autoformer and
-  Transformer; the index contains no record for either.
+- **Scope.** `scripts/NeuroSigVIA.sh`, `scripts/Medformer.sh` and
+  `scripts/PatchTST.sh` also list ADFTD; the index contains no ADFTD record.
 - **Index contents.** The index stores the original run location and the
   machine name of each record; review these columns before publishing it.

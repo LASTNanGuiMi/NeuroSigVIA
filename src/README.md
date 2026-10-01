@@ -1,7 +1,7 @@
 # Source modules
 
 The modules under `src/` are organized by their function in NeuroSigVIA.
-The Medformer baseline and the other five baseline implementations live in
+The Medformer and PatchTST baseline implementations live in
 `third_party/medformer/` and are called by `runners/baselines.py`. Its shared
 dataset loader is `data_loading/experiment.py`.
 

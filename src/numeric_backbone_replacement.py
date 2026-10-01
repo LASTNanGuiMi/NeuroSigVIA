@@ -21,7 +21,7 @@ from src.multimodal_fusion import AdaptiveGranularityFusionModule
 
 
 ARCHITECTURE = "neurosigvia_numeric_backbone_replacement_v1"
-BACKBONES = ("Medformer", "Crossformer", "TimesNet", "PatchTST")
+BACKBONES = ("Medformer", "TimesNet", "PatchTST")
 
 
 def backbone_config(
@@ -134,18 +134,6 @@ class ConventionalNumericEncoder(nn.Module):
             hidden, _ = self.upstream.encoder(hidden, attn_mask=None)
             hidden = self.upstream.dropout(self.upstream.act(hidden))
             token = hidden.mean(dim=1)
-        elif self.name == "Crossformer":
-            from einops import rearrange
-
-            hidden, variables = self.upstream.enc_value_embedding(x.permute(0, 2, 1))
-            hidden = rearrange(
-                hidden,
-                "(b d) seg_num width -> b d seg_num width",
-                d=variables,
-            )
-            hidden = self.upstream.pre_norm(hidden + self.upstream.enc_pos_embedding)
-            encoded, _ = self.upstream.encoder(hidden)
-            token = self.upstream.dropout(encoded[-1]).mean(dim=(1, 2))
         elif self.name == "PatchTST":
             # PatchTST's instance normalization, computed over the valid prefix only.
             weights = time_mask.unsqueeze(-1).to(dtype=x.dtype)
@@ -272,7 +260,7 @@ class DirectTemporalFusionModule(AdaptiveGranularityFusionModule):
 
 
 class NumericBackboneReplacementClassifier(NeuroSigVIAClassifier):
-    """Full model whose numeric branch is Medformer/Crossformer/TimesNet."""
+    """Full model whose numeric branch is Medformer/PatchTST/TimesNet."""
 
     def __init__(self, *, backbone_name: str, vendor_root: Path, backbone_config_values=None, **kwargs):
         values = dict(backbone_config_values or {})

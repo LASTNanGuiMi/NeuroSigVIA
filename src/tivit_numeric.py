@@ -79,6 +79,10 @@ def check_vendor_source(run_dir, model_name):
         if not relative.startswith("layers/") and relative != f"models/{model_name}.py":
             continue
         local = vendor_root / relative
+        # Recorded layer files of upstream models this repository no longer ships are skipped;
+        # a missing layer the model does import fails when the model is built.
+        if relative.startswith("layers/") and not local.is_file():
+            continue
         if sha(local) != digest:
             raise ValueError(f"{local} differs from the source that trained {run_dir}")
         checked[relative] = digest

@@ -68,8 +68,11 @@ def check_source(name, run_dir):
     else:
         recorded = json.loads((run_dir / "source_metadata.json").read_text())["source_sha256"]
         prefix = f"third_party/{root.name}/"
+        # Recorded layer files of upstream models this repository no longer ships are skipped;
+        # a missing layer the model does import fails when the model is built.
         wanted = {k: k.split(prefix, 1)[1] for k in recorded if prefix in k
-                  and (k.split(prefix, 1)[1].startswith("layers/") or k.endswith(f"models/{name}.py"))}
+                  and ((k.split(prefix, 1)[1].startswith("layers/") and (root / k.split(prefix, 1)[1]).is_file())
+                       or k.endswith(f"models/{name}.py"))}
     checked = {}
     for key, relative in wanted.items():
         if sha256(root / relative) != recorded[key]:

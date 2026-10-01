@@ -31,7 +31,7 @@ from tqdm.auto import tqdm
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODELS = ("Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer", "TimesNet")
+MODELS = ("Medformer", "PatchTST", "TimesNet")
 DATASETS = ("adftd", "tdbrain", "apava", "shimmer10", "pads11")
 # 固定划分标识：APAVA 使用 0917 新划分，其余数据集沿用原固定划分。
 SPLIT_SEEDS = dict(adftd=42, tdbrain=42, apava=20260917, shimmer10=42, pads11=42)
@@ -227,17 +227,6 @@ def source_metadata(vendor_root):
             "deterministic_algorithms_enforced": False}
 
 
-def fixed_model_indices(model):
-    """FEDformer samples Fourier modes into Python lists outside state_dict."""
-    result = {}
-    for module_name, module in model.named_modules():
-        for name in ("index", "index_q", "index_kv"):
-            values = getattr(module, name, None)
-            if isinstance(values, (tuple, list)) and all(isinstance(value, (int, np.integer)) for value in values):
-                result[f"{module_name}.{name}"] = [int(value) for value in values]
-    return result
-
-
 def forward(model, x, device, num_classes):
     # 数据加载器输出 [批次, 通道, 时间]，上游基线模型接收 [批次, 时间, 通道]。
     x = x.to(device, dtype=torch.float32).transpose(1, 2).contiguous()
@@ -369,7 +358,6 @@ def run(args):
         metadata["gpu"] = {"name": properties.name, "total_memory_bytes": properties.total_memory,
                            "logical_index": args.gpu}
     metadata["trainable_parameters"] = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
-    metadata["fixed_model_indices_outside_state_dict"] = fixed_model_indices(model)
     write_json(args.result_dir / "source_metadata.json", metadata)
     protocol = {
         "model": args.model, "dataset": args.dataset, "random_seed": args.random_seed,
@@ -444,8 +432,7 @@ def run(args):
                           **selection_metadata(args.checkpoint_metric),
                           "random_seed": args.random_seed, "split_seed": args.split_seed, "smoke": args.smoke,
                           "swa": args.swa,
-                          "swa_n_averaged": (int(averaged_model.n_averaged.item()) if averaged_model is not None else 0),
-                          "fixed_model_indices_outside_state_dict": fixed_model_indices(model)}
+                          "swa_n_averaged": (int(averaged_model.n_averaged.item()) if averaged_model is not None else 0)}
             temporary = args.result_dir / "best_checkpoint.tmp.pt"
             torch.save(checkpoint, temporary)
             os.replace(temporary, args.result_dir / "best_checkpoint.pt")

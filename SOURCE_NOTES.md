@@ -72,8 +72,8 @@ layout; optional selector utilities retain their own adaptation boundaries.
 
 ## Baseline models
 
-The Medformer, Crossformer, FEDformer, Autoformer, PatchTST and Transformer
-implementations and their shared layers were copied from
+The Medformer and PatchTST implementations and the layers they import were
+copied from
 [DL4mHealth/Medformer](https://github.com/DL4mHealth/Medformer) at commit
 `446275f27b713a9f09917a6ba0bc51a18e921597` into `third_party/medformer/`.
 Their original model names and MIT attribution remain intact; see
@@ -81,7 +81,7 @@ Their original model names and MIT attribution remain intact; see
 [the license](third_party/medformer/LICENSE) and
 [the file hashes](third_party/medformer/SOURCE_MANIFEST.json).
 
-The seventh baseline, TimesNet, follows the code link from
+The TimesNet baseline follows the code link from
 [thuml/TimesNet](https://github.com/thuml/TimesNet) to
 [thuml/Time-Series-Library](https://github.com/thuml/Time-Series-Library), pinned
 at commit `4e938a1767106324dd753b2a44832bf870a0252e`. Its model, embedding and
