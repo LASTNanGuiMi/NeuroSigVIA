@@ -33,9 +33,15 @@ NeuroSigVIA/
 |   |-- __init__.py
 |   |-- neurosigvia.py
 |   |-- baselines.py
-|   `-- numeric_ablation.py
+|   |-- tech.py
+|   |-- tivit_numeric.py
+|   |-- numeric_ablation.py
+|   |-- vision_ablation.py
+|   `-- numeric_backbone_frozen.py
 |-- third_party/medformer/
 |-- third_party/timesnet/
+|-- third_party/tech/
+|-- third_party/tivit/
 |-- src/
 |   |-- README.md
 |   |-- neurosigvia.py
@@ -76,7 +82,15 @@ NeuroSigVIA/
 |   |-- PatchTST.sh
 |   |-- Transformer.sh
 |   |-- TimesNet.sh
-|   |-- NeuroSigVIA_NumericOnly.sh
+|   |-- TeCh.sh
+|   |-- TiViT_FrozenBackbone.sh
+|   |-- Ablation_wo_Visual.sh
+|   |-- Ablation_wo_Numeric.sh
+|   |-- Ablation_NumericBackbone.sh
+|   |-- Ablation_Fusion.sh
+|   |-- Ablation_Imaging.sh
+|   |-- Ablation_ViTLayer.sh
+|   |-- Ablation_FixedGranularity.sh
 |   `-- lib/explicit_experiments.sh
 |-- tests/
 |-- DATA_PROCESSING.md
@@ -87,8 +101,11 @@ NeuroSigVIA/
 ```
 
 Training implementations live in `runners/`: `neurosigvia.py` runs the current
-method, `baselines.py` runs the comparison models, and `numeric_ablation.py`
-runs the paired NumericOnly ablation. Shared baseline dataset
+method and the ablations that only change its options, `baselines.py` and
+`tech.py` run the comparison models, `tivit_numeric.py` runs TiViT with a frozen
+comparison encoder, and `numeric_ablation.py`, `vision_ablation.py` and
+`numeric_backbone_frozen.py` run the branch and numeric-encoder ablations.
+Shared baseline dataset
 loading lives in `data_loading/experiment.py`. The method shell scripts call
 these modules with `python -m`; root `main.py` only forwards existing queued
 commands to `runners.neurosigvia`.
@@ -223,7 +240,7 @@ Each method script lists every dataset and seed as a separate multiline
 subshell with its own `export CUDA_VISIBLE_DEVICES`; its seed 42, 43 and 44
 commands run sequentially, while dataset blocks run in parallel. NeuroSigVIA
 and the six Medformer-family scripts cover all five datasets; TimesNet and
-NumericOnly cover the four non-ADFTD datasets:
+the ablation scripts cover the four non-ADFTD datasets:
 
 ```bash
 conda activate neurosigvia
@@ -318,7 +335,7 @@ in the corresponding method script so the same `bash scripts/<Method>.sh`
 command reproduces its saved configuration. Every command spells out its
 dataset, seed and output path beneath the shared run-tag directory.
 
-`scripts/NeuroSigVIA_NumericOnly.sh` lists 12 standalone commands for
+`scripts/Ablation_wo_Visual.sh` lists 12 standalone commands for
 TDBRAIN/APAVA/Shimmer10/PADS11 and seeds 42/43/44. Every command states its
 model dimensions and training settings explicitly, encodes the raw windows
 with frozen Mantis itself, initializes a fresh numeric-only model, and selects
@@ -329,8 +346,44 @@ main-method run. The default GPU exports are Shimmer10=2, PADS11=3, APAVA=4
 and TDBRAIN=5; edit each block to use available GPUs before launching:
 
 ```bash
-bash scripts/NeuroSigVIA_NumericOnly.sh
+bash scripts/Ablation_wo_Visual.sh
 ```
+
+### Comparison and ablation launchers
+
+Every script below lists one explicit command per dataset and seed for
+TDBRAIN, APAVA, Shimmer10 and PADS11 (GPUs 0/1/2/3, seeds 42/43/44) and
+supports `DRY_RUN=1`. The arguments are those of the runs behind the reported
+tables; edit a command to change them.
+
+| Script | Experiment | What changes relative to the main method |
+| --- | --- | --- |
+| `TeCh.sh` | Comparison method TeCh | Upstream TeCh model on the fixed subject splits (`runners/tech.py`) |
+| `TiViT_FrozenBackbone.sh` | Extended comparison (starred columns) | TiViT grayscale visual branch at ViT block 32 plus a frozen Medformer / PatchTST / TimesNet / TeCh encoder, fused by concatenation and a logistic-regression probe |
+| `Ablation_wo_Visual.sh` | Branch ablation, w/o Visual | Mantis numeric branch and classifier only |
+| `Ablation_wo_Numeric.sh` | Branch ablation, w/o Numeric | Line-plot and adaptive Activity Graph path only; paired with a completed main run through `REFERENCE_RUN` |
+| `Ablation_NumericBackbone.sh` | Numeric feature-extractor ablation | Mantis replaced by a frozen TeCh / PatchTST / Medformer / TimesNet encoder |
+| `Ablation_Fusion.sh` | Fusion ablation | `--temporal_visual_fusion` cross_attn_gate / concat_attn / concat / masked_pretrain with InfoNCE alignment disabled |
+| `Ablation_Imaging.sh` | Imaging ablation | `--image_representation` gaf / adaptive_heatmap / tivit_grayscale / ordinary_line: one image per window, no line-plot branch, gate or cross-attention |
+| `Ablation_ViTLayer.sh` | Visual-encoder depth ablation | `--vit_1_layer` 1 / 3 / 24 / 32 (14 is the main method) |
+| `Ablation_FixedGranularity.sh` | Fixed-granularity ablation | `--fixed_granularity` 4 / 8 / 16 instead of the adaptive gate |
+
+`TiViT_FrozenBackbone.sh` and `Ablation_NumericBackbone.sh` restore encoders from
+comparison-method runs trained with this repository. Run the corresponding
+baseline scripts first and pass their run directories:
+
+```bash
+MEDFORMER_RUN=results/<RUN_TAG> PATCHTST_RUN=results/<RUN_TAG> \
+TIMESNET_RUN=results/<RUN_TAG> TECH_RUN=results/<RUN_TAG> \
+bash scripts/Ablation_NumericBackbone.sh
+```
+
+The fusion and imaging ablations use batch size 4 and window-level checkpoint
+selection on Shimmer10 (the ordinary_line imaging row uses batch size 1) and
+the default learning rate and dropout on PADS11,
+whereas the main method uses batch size 1 with subject-level selection on
+Shimmer10 and tuned values on PADS11; the TDBRAIN cross_attn_gate and concat_attn
+commands use batch size 32. These are the settings of the reported runs.
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
 granularities 4/8/16, a 4 x 4 graph-token grid, line-Q/graph-KV attention,
@@ -372,7 +425,7 @@ The official TimesNet model and its required layers are under `third_party/times
 | `src/multimodal_fusion.py` | Visual-temporal InfoNCE and final `concat_attn` fusion |
 | `src/adaptive_graph_training.py` | Current feature-cache, training, evaluation, and checkpoint path |
 | `scripts/NeuroSigVIA.sh` and seven baseline method scripts | Explicit commands for three seeds; TimesNet covers four non-ADFTD datasets, other scripts cover five |
-| `scripts/NeuroSigVIA_NumericOnly.sh` | Four datasets and three seeds paired with a completed `REFERENCE_RUN` and its cached features |
+| `scripts/Ablation_wo_Visual.sh` and the other `Ablation_*` / `TeCh.sh` / `TiViT_FrozenBackbone.sh` launchers | Explicit commands for the branch, encoder, fusion, imaging, depth and granularity experiments on four datasets and three seeds |
 | `third_party/timesnet/` | Pinned official TimesNet model, required layers, MIT license and integration notes |
 | `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |
 | `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |

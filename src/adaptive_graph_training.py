@@ -22,7 +22,7 @@ import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Sequence, Any
 
 import numpy as np
 import torch
@@ -694,6 +694,12 @@ class NeuroSigVIAClassifier(nn.Module):
         cross_attention_bias: bool = True,
         adaptive_gate_checkpoint=None,
         strict_gate_checkpoint: bool = True,
+        fixed_granularity: int | None = None,
+        granularity_region_length: int = 16,
+        granularity_candidates: Sequence[int] = (4, 8, 16),
+        temporal_visual_fusion: str = "concat_attn",
+        alignment_enabled: bool = True,
+        mask_prob: float = 0.3,
     ) -> None:
         super().__init__()
         self._expected_vision_encoder_contract: Mapping[str, Any] | None = None
@@ -714,7 +720,16 @@ class NeuroSigVIAClassifier(nn.Module):
             canvas_size=activity_graph_canvas_size,
             line_width=activity_graph_line_width,
             vertical_margin=activity_graph_vertical_margin,
+            region_length=granularity_region_length,
+            granularities=granularity_candidates,
         )
+        self.fixed_granularity = None if fixed_granularity is None else int(fixed_granularity)
+        if self.fixed_granularity is not None:
+            granularities = tuple(int(g) for g in self.renderer.gate.granularities)
+            if self.fixed_granularity not in granularities:
+                raise ValueError(f"fixed_granularity must be one of {granularities}")
+            self.renderer.gate.fixed_index = granularities.index(self.fixed_granularity)
+            self.renderer.gate.freeze_gate(True)
         self.fusion = AdaptiveGranularityFusionModule(
             visual_dim=visual_dim,
             temporal_dim=temporal_dim,
@@ -728,6 +743,9 @@ class NeuroSigVIAClassifier(nn.Module):
             channel_hidden_dim=channel_hidden_dim,
             alignment_dim=alignment_dim,
             alignment_temperature=alignment_temperature,
+            temporal_visual_fusion=temporal_visual_fusion,
+            alignment_enabled=alignment_enabled,
+            mask_prob=mask_prob,
             cross_attention_ffn_hidden_dim=cross_attention_ffn_hidden_dim,
             cross_attention_bias=cross_attention_bias,
         )
@@ -746,6 +764,9 @@ class NeuroSigVIAClassifier(nn.Module):
             "channel_hidden_dim": int(channel_hidden_dim),
             "alignment_dim": int(alignment_dim),
             "alignment_temperature": float(alignment_temperature),
+            "temporal_visual_fusion": temporal_visual_fusion,
+            "alignment_enabled": alignment_enabled,
+            "mask_prob": float(mask_prob),
             "graph_image_size": int(graph_image_size),
             "graph_token_grid": self.graph_token_grid,
             "activity_graph_canvas_size": int(activity_graph_canvas_size),
@@ -761,6 +782,9 @@ class NeuroSigVIAClassifier(nn.Module):
                 else int(cross_attention_ffn_hidden_dim)
             ),
             "cross_attention_bias": bool(cross_attention_bias),
+            "fixed_granularity": self.fixed_granularity,
+            "granularity_region_length": int(self.renderer.gate.region_length),
+            "granularity_candidates": [int(g) for g in self.renderer.gate.granularities],
         }
         fusion_configuration = dict(self.fusion.configuration)
         fusion_configuration["visual_token_count"] = self.graph_token_grid**2
@@ -969,6 +993,23 @@ class NeuroSigVIAClassifier(nn.Module):
             "selector_mean_entropy": mean_entropy,
         }
 
+    def _fixed_selector_details(self, valid_decisions, graph_tokens):
+        # 预计算路径下的门控诊断：与在线固定粒度路径（one-hot 概率）数值一致。
+        count = len(self.renderer.gate.granularities)
+        onehot = torch.zeros(count, device=graph_tokens.device, dtype=torch.float32)
+        onehot[self.renderer.gate.fixed_index] = 1.0
+        total = valid_decisions.to(device=graph_tokens.device, dtype=torch.float32).sum()
+        uniform = torch.full_like(onehot, 1.0 / count)
+        return {
+            "selector_balance_loss": (onehot - uniform).abs().mean(),
+            "selector_soft_usage": onehot,
+            "selector_hard_usage": onehot,
+            "selector_probability_sum": onehot * total,
+            "selector_hard_count": onehot * total,
+            "selector_valid_count": total,
+            "selector_mean_entropy": torch.zeros((), device=graph_tokens.device),
+        }
+
     def forward(
         self,
         raw_windows: torch.Tensor,
@@ -983,6 +1024,9 @@ class NeuroSigVIAClassifier(nn.Module):
         graph_spatial_grid_size: int | None = None,
         vision_gradient_checkpointing: bool = True,
         return_attention_weights: bool = False,
+        precomputed_graph_tokens: torch.Tensor | None = None,
+        precomputed_valid_decisions: torch.Tensor | None = None,
+        pretrain: bool = False,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
         self._validate_bound_vision_encoder(vision_model)
         if graph_spatial_grid_size is None:
@@ -992,7 +1036,13 @@ class NeuroSigVIAClassifier(nn.Module):
                 "graph_spatial_grid_size cannot override the checkpoint/model "
                 f"contract {self.graph_token_grid}; got {graph_spatial_grid_size}"
             )
-        graph_tokens, selector_details = self._encode_adaptive_graphs(
+        if precomputed_graph_tokens is not None:
+            if self.fixed_granularity is None:
+                raise ValueError("precomputed graph tokens are only valid with a fixed granularity")
+            graph_tokens = precomputed_graph_tokens
+            selector_details = self._fixed_selector_details(precomputed_valid_decisions, graph_tokens)
+        else:
+          graph_tokens, selector_details = self._encode_adaptive_graphs(
             raw_windows,
             valid_lengths,
             patch_mask,
@@ -1012,6 +1062,7 @@ class NeuroSigVIAClassifier(nn.Module):
             patch_mask,
             valid_fraction,
             return_attention_weights=return_attention_weights,
+            pretrain=pretrain,
         )
         details.update(selector_details)
         return logits, details
@@ -1029,6 +1080,7 @@ def _build_static_loader(bundle, labels, indices, batch_size, shuffle):
         bundle["valid_lengths"],
         torch.as_tensor(labels, dtype=torch.long),
         torch.arange(len(labels), dtype=torch.long),
+        *([bundle["fixed_graph_tokens"], bundle["fixed_valid_decisions"]] if "fixed_graph_tokens" in bundle else []),
     )
     return DataLoader(
         Subset(dataset, list(indices)),
@@ -1047,8 +1099,13 @@ def _forward_training_batch(
     visual_encode_batch_size: int,
     graph_spatial_grid_size: int,
     vision_gradient_checkpointing: bool,
+    pretrain: bool = False,
 ):
-    raw, line, mantis, mask, fraction, lengths, labels, sample_indices = batch
+    raw, line, mantis, mask, fraction, lengths, labels, sample_indices = batch[:8]
+    extra = {}
+    if len(batch) > 8:
+        extra = dict(precomputed_graph_tokens=batch[8].to(device=device, dtype=torch.float32),
+                     precomputed_valid_decisions=batch[9].to(device=device))
     # 半精度缓存入设备后转回 float32；仅 labels=[B] 送分类损失，N 个内部块不复制标签。
     logits, details = model(
         raw.to(device=device, dtype=torch.float32),
@@ -1061,8 +1118,67 @@ def _forward_training_batch(
         visual_encode_batch_size=visual_encode_batch_size,
         graph_spatial_grid_size=graph_spatial_grid_size,
         vision_gradient_checkpointing=vision_gradient_checkpointing,
+        # Only the masked-pretraining pass sets this flag; other model classes that
+        # reuse this helper do not take it.
+        **({"pretrain": True} if pretrain else {}),
+        **extra,
     )
     return logits, details, labels.to(device=device, dtype=torch.long), sample_indices
+
+
+def _run_fusion_pretraining(model, fit_loader, vision_model, device, *, epochs,
+                            lr, weight_decay, visual_encode_batch_size,
+                            graph_spatial_grid_size, artifact_dir=None):
+    """Legacy masked branch reconstruction using only the training split.
+
+    Freeze all upstream modules. Only temporal_visual_fusion parameters update;
+    classification labels and validation/test loaders are never used here.
+    """
+    parameters = list(model.parameters())
+    original_requires_grad = [p.requires_grad for p in parameters]
+    fusion = model.fusion.temporal_visual_fusion
+    history = []
+    try:
+        for p in parameters:
+            p.requires_grad_(False)
+        for p in fusion.parameters():
+            p.requires_grad_(True)
+        optimizer = torch.optim.AdamW(fusion.parameters(), lr=lr, weight_decay=weight_decay)
+        for epoch in range(epochs):
+            model.eval()
+            fusion.train()
+            total_loss, updates, skipped = 0.0, 0, 0
+            for batch in tqdm(fit_loader, desc=f"Masked fusion pretrain {epoch+1}/{epochs}", leave=False):
+                optimizer.zero_grad(set_to_none=True)
+                _, details, _, _ = _forward_training_batch(
+                    model, batch, vision_model, device,
+                    visual_encode_batch_size=visual_encode_batch_size,
+                    graph_spatial_grid_size=graph_spatial_grid_size,
+                    vision_gradient_checkpointing=False, pretrain=True,
+                )
+                if not details["reconstruction_applied"]:
+                    skipped += 1
+                    continue
+                loss = details["reconstruction_loss"]
+                if not torch.isfinite(loss):
+                    raise ValueError("nonfinite masked reconstruction loss")
+                loss.backward()
+                optimizer.step()
+                total_loss += float(loss.detach())
+                updates += 1
+            mean_loss = total_loss/updates if updates else 0.0
+            history.append({"epoch":epoch+1,"reconstruction_loss":mean_loss,
+                            "updates":updates,"skipped_batches":skipped})
+            print(f"Masked fusion pretrain epoch {epoch+1}/{epochs} | loss={mean_loss:.6f} | updates={updates}", flush=True)
+            if artifact_dir is not None:
+                _atomic_json_dump(Path(artifact_dir)/"masked_pretraining_history.json", history)
+    finally:
+        for p, flag in zip(parameters, original_requires_grad):
+            p.requires_grad_(flag)
+            p.grad = None
+    if sum(row["updates"] for row in history) == 0:
+        raise RuntimeError("masked pretraining completed without any reconstruction updates")
+    return history
 
 
 def _run_epoch(
@@ -1091,7 +1207,7 @@ def _run_epoch(
     hard_count = None
     valid_count = 0.0
     sample_count = 0
-    for batch in tqdm(loader, desc="Train adaptive Activity Graph", leave=False):
+    for batch in tqdm(loader, desc=("Train Heatmap aligned fusion" if model.get_config().get("image_representation") else "Train adaptive Activity Graph"), leave=False):
         optimizer.zero_grad(set_to_none=True)
         logits, details, labels, _ = _forward_training_batch(
             model,
@@ -1121,7 +1237,8 @@ def _run_epoch(
         # 总损失反传后校验可训练门控的梯度，避免训练路径静默断开。
         trainable_gate_parameters = [
             parameter
-            for parameter in model.renderer.gate.region_cls.parameters()
+            for parameter in (model.renderer.gate.region_cls.parameters()
+                              if hasattr(model, "renderer") else [])
             if parameter.requires_grad
         ]
         if trainable_gate_parameters and not all(
@@ -1379,7 +1496,7 @@ def _save_checkpoint(
     temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     payload = {
         "schema_version": NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION,
-        "architecture": NEUROSIGVIA_ARCHITECTURE,
+        "architecture": model.configuration["architecture"],
         "model_state_dict": _cpu_state_dict(model),
         "model_constructor_configuration": model.get_config(),
         "model_configuration": dict(model.configuration),
@@ -1412,10 +1529,10 @@ def _save_checkpoint(
             "mantis_encoder_parameters_included": False,
             "line_and_mantis_features_cached": True,
             "activity_graph_generated_online": True,
-            "temporal_visual_fusion": "concat_attn",
-            "temporal_visual_fusion_semantics": (
-                "branch_projection_then_two_token_self_attention_then_flatten"
-            ),
+            "temporal_visual_fusion": model.fusion.configuration["temporal_visual_fusion"],
+            "temporal_visual_fusion_semantics": model.fusion.configuration["temporal_visual_fusion_semantics"],
+            "alignment_enabled": model.get_config()["alignment_enabled"],
+            "masked_pretraining": getattr(model, "masked_pretraining_metadata", None),
             "temporal_visual_branch_order": [
                 "cross_attention_visual",
                 "mantis_temporal",
@@ -1427,6 +1544,26 @@ def _save_checkpoint(
         "lr_scheduler": _json_safe(scheduler_configuration),
         "training_history": _json_safe(training_history),
     }
+    if model.get_config().get("image_representation"):
+        mode = model.get_config()["image_representation"]
+        payload["feature_cache"].update(
+            architecture="neurosigvia_heatmap_static_v1",
+            visual_feature_storage_key="line_tokens",
+            visual_feature_semantics="frozen_heatmap_embedding_legacy_loader_adapter",
+        )
+        payload["protocol"].update(
+            image_representation=mode,
+            heatmap_patch_size=model.get_config()["heatmap_patch_size"],
+            fusion_input="aligned_projected_features",
+            visual_cross_attention_enabled=False,
+            granularity_selection_enabled=False,
+            graph_spatial_grid_size=None, graphs_per_valid_window=0,
+            heatmaps_per_valid_window=1,
+            line_and_mantis_features_cached=False,
+            heatmap_and_mantis_features_cached=True,
+            activity_graph_generated_online=False,
+            temporal_visual_branch_order=["aligned_visual", "aligned_temporal"],
+        )
     try:
         torch.save(payload, temporary_path)
         temporary_path.replace(path)
@@ -1462,13 +1599,13 @@ def load_neurosigvia_checkpoint(
         raise TypeError("adaptive granularity graph checkpoint must contain a mapping")
     if payload.get("schema_version") != NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION:
         raise ValueError("adaptive granularity graph checkpoint schema mismatch")
-    if not matches_checkpoint_architecture(
-        payload.get("architecture"), NEUROSIGVIA_ARCHITECTURE
-    ):
-        raise ValueError("adaptive granularity graph checkpoint architecture mismatch")
-    model = NeuroSigVIAClassifier.from_config(
-        payload["model_constructor_configuration"]
-    )
+    if payload.get("architecture") == "neurosigvia_heatmap_aligned_concat_attn_v1":
+        from src.heatmap_ablation import HeatmapClassifier
+        model = HeatmapClassifier.from_config(payload["model_constructor_configuration"])
+    else:
+        if not matches_checkpoint_architecture(payload.get("architecture"), NEUROSIGVIA_ARCHITECTURE):
+            raise ValueError("checkpoint architecture mismatch")
+        model = NeuroSigVIAClassifier.from_config(payload["model_constructor_configuration"])
     model.load_state_dict(payload["model_state_dict"], strict=strict)
     contracts = payload.get("external_encoder_contracts")
     if not isinstance(contracts, Mapping) or not isinstance(
@@ -1566,6 +1703,15 @@ def train_neurosigvia_classifier(
     freeze_gate=False,
     strict_gate_checkpoint=True,
     vision_gradient_checkpointing=True,
+    fixed_granularity=None,
+    granularity_region_length=16,
+    granularity_candidates=(4, 8, 16),
+    temporal_visual_fusion="concat_attn",
+    alignment_enabled=True,
+    mask_prob=0.3,
+    pretrain_epochs=10,
+    image_representation="activity_graph",
+    heatmap_patch_size=8,
 ):
     """Train the corrected adaptive-graph path and return the legacy four-tuple.
 
@@ -1573,6 +1719,24 @@ def train_neurosigvia_classifier(
     The source loaders retain the legacy contract: each batch must be either
     ``(signals,)`` or ``(signals, lengths)`` and labels are supplied separately.
     """
+    heatmap_enabled = image_representation != "activity_graph"
+    if image_representation not in {"activity_graph", "multivariate_heatmap", "patch_heatmap", "ordinary_line", "adaptive_heatmap", "gaf", "tivit_grayscale"}:
+        raise ValueError("unsupported image_representation")
+    if heatmap_enabled:
+        if checkpoint_metric != "window_macro_f1":
+            raise ValueError("Heatmap experiments require window-level validation and testing")
+        if not alignment_enabled or alignment_weight <= 0 or temporal_visual_fusion != "concat_attn":
+            raise ValueError("Heatmap ablation requires joint contrastive alignment then concat_attn")
+        if selector_balance_weight != 0 or gate_checkpoint is not None or freeze_gate:
+            raise ValueError("Heatmap ablation removes the granularity gate and its loss")
+        if pretrain_epochs != 0:
+            raise ValueError("Heatmap contrastive training is joint supervised training; pretrain_epochs must be 0")
+        if isinstance(heatmap_patch_size, bool) or not isinstance(heatmap_patch_size, int) or heatmap_patch_size <= 0:
+            raise ValueError("heatmap_patch_size must be a positive integer")
+    if not alignment_enabled and alignment_weight != 0:
+        raise ValueError("disabled alignment requires alignment_weight=0")
+    if temporal_visual_fusion == "masked_pretrain" and pretrain_epochs <= 0:
+        raise ValueError("masked_pretrain requires positive pretrain_epochs")
     device = torch.device(device)
     positive_integer_arguments = {
         "channels": channels,
@@ -1728,7 +1892,15 @@ def train_neurosigvia_classifier(
     if len(classes) < 2:
         raise ValueError("classification requires at least two training classes")
     test_label_indices = _map_labels(test_labels, class_to_index)
-    train_features = _get_static_split(
+    if heatmap_enabled:
+        from functools import partial
+        from src.heatmap_cache import get_heatmap_static_split
+        get_features = partial(get_heatmap_static_split,
+                               image_representation=image_representation,
+                               heatmap_patch_size=heatmap_patch_size)
+    else:
+        get_features = _get_static_split
+    train_features = get_features(
         "train",
         train_loader,
         train_labels,
@@ -1743,7 +1915,7 @@ def train_neurosigvia_classifier(
         expected_channels=channels,
     )
     # 此处仅准备测试集静态特征；测试预测在训练结束、恢复最佳验证权重后执行。
-    test_features = _get_static_split(
+    test_features = get_features(
         "test",
         test_loader,
         test_labels,
@@ -1759,7 +1931,7 @@ def train_neurosigvia_classifier(
     )
     if has_fixed_validation:
         val_label_indices = _map_labels(val_labels, class_to_index)
-        val_features = _get_static_split(
+        val_features = get_features(
             "vali",
             val_loader,
             val_labels,
@@ -1821,7 +1993,15 @@ def train_neurosigvia_classifier(
         if int(features["mantis_channel_tokens"].shape[-1]) != temporal_dim:
             raise ValueError(f"{split_name} Mantis feature dimension mismatch")
 
-    model = NeuroSigVIAClassifier(
+    if heatmap_enabled:
+        from functools import partial
+        from src.heatmap_ablation import HeatmapClassifier
+        model_factory = partial(HeatmapClassifier,
+                                image_representation=image_representation,
+                                heatmap_patch_size=heatmap_patch_size)
+    else:
+        model_factory = NeuroSigVIAClassifier
+    model = model_factory(
         visual_dim=visual_dim,
         temporal_dim=temporal_dim,
         num_channels=channels,
@@ -1845,7 +2025,46 @@ def train_neurosigvia_classifier(
         cross_attention_bias=cross_attention_bias,
         adaptive_gate_checkpoint=gate_checkpoint,
         strict_gate_checkpoint=strict_gate_checkpoint,
+        temporal_visual_fusion=temporal_visual_fusion,
+        alignment_enabled=alignment_enabled,
+        mask_prob=mask_prob,
+        **({} if heatmap_enabled else {
+            "fixed_granularity": fixed_granularity,
+            "granularity_region_length": granularity_region_length,
+            "granularity_candidates": granularity_candidates,
+        }),
     ).to(device)
+    if fixed_granularity is not None:
+        if heatmap_enabled:
+            raise ValueError("fixed_granularity applies to the Activity Graph path only")
+        # 固定粒度时活动图与可训练参数无关：用与在线路径相同的函数一次性计算图 token 并缓存。
+        from src.fixed_granularity import attach_fixed_graph_tokens
+        split_bundles = [("train", train_features), ("test", test_features)]
+        if has_fixed_validation:
+            split_bundles.append(("vali", val_features))
+        for split_name, bundle in split_bundles:
+            attach_fixed_graph_tokens(model, bundle, vision_model, device, split_name=split_name,
+                                      cache_dir=feature_cache_dir, encode_batch_size=visual_encode_batch_size,
+                                      graph_token_grid=graph_token_grid, q=fixed_granularity)
+        fit_loader = _build_static_loader(train_features, train_label_indices, train_indices, batch_size, shuffle=True)
+        if has_fixed_validation:
+            validation_loader = _build_static_loader(val_features, val_label_indices, val_indices, batch_size, shuffle=False)
+        else:
+            validation_loader = _build_static_loader(train_features, train_label_indices, val_indices, batch_size, shuffle=False)
+        test_feature_loader = _build_static_loader(test_features, test_label_indices, range(len(test_label_indices)), batch_size, shuffle=False)
+    pretraining_history = []
+    if temporal_visual_fusion == "masked_pretrain":
+        pretraining_history = _run_fusion_pretraining(
+            model, fit_loader, vision_model, device, epochs=pretrain_epochs,
+            lr=lr, weight_decay=weight_decay,
+            visual_encode_batch_size=visual_encode_batch_size,
+            graph_spatial_grid_size=graph_token_grid, artifact_dir=artifact_dir,
+        )
+    model.masked_pretraining_metadata = {
+        "epochs": len(pretraining_history), "mask_prob": float(mask_prob),
+        "scope": "training_split_only_fusion_parameters_only",
+        "history": pretraining_history,
+    }
     # 优化器仅接收分类器内可训练的参数；外部冻结的视觉和 Mantis 编码器不参与更新。
     optimizer = torch.optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
@@ -2056,7 +2275,13 @@ def train_neurosigvia_classifier(
             Path(artifact_dir) / "adaptive_graph_summary.json",
             {
                 "schema_version": NEUROSIGVIA_CHECKPOINT_SCHEMA_VERSION,
-                "architecture": NEUROSIGVIA_ARCHITECTURE,
+                "architecture": model.configuration["architecture"],
+                "image_representation": image_representation,
+                "heatmap_patch_size": heatmap_patch_size if heatmap_enabled else None,
+                "fusion_input": "aligned_projected_features" if heatmap_enabled else "unaligned_branch_tokens_with_auxiliary_alignment_loss",
+                "visual_cross_attention_enabled": not heatmap_enabled,
+                "granularity_selection_enabled": not heatmap_enabled,
+                "image_configuration": model.configuration.get("rendering"),
                 "checkpoint": checkpoint_path.name,
                 "best_epoch": best_epoch,
                 **_evaluation_protocol(checkpoint_metric_effective),
@@ -2064,6 +2289,10 @@ def train_neurosigvia_classifier(
                 "validation_predictions": "validation_predictions.npz",
                 "test_predictions": "test_predictions.npz",
                 "test_evaluations": 1,
+                "temporal_visual_fusion": temporal_visual_fusion,
+                "alignment_enabled": alignment_enabled,
+                "alignment_weight": alignment_weight,
+                "masked_pretraining": model.masked_pretraining_metadata,
                 "validation_metrics": val_metrics,
                 "test_metrics": test_metrics,
                 "validation_selector_soft_usage": val_details[

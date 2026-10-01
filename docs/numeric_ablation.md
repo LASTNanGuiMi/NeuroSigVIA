@@ -97,7 +97,7 @@ Read-only preflight (GPU memory should be below 500 MiB on GPUs 2,3,4,5):
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
 python -m unittest discover -s tests -p test_numeric_ablation.py -v
 python -m unittest discover -s tests -p test_window_numeric_protocol.py -v
-DRY_RUN=1 bash scripts/NeuroSigVIA_NumericOnly.sh
+DRY_RUN=1 bash scripts/Ablation_wo_Visual.sh
 ```
 
 Expect unit tests to pass and the dry run to print 12 commands, each bound to one
@@ -114,7 +114,7 @@ a future authorized preflight; changing the model code does not launch it.
 Production (use a persistent tmux session):
 
 ```bash
-bash scripts/NeuroSigVIA_NumericOnly.sh
+bash scripts/Ablation_wo_Visual.sh
 ```
 
 The default scheduler assigns Shimmer/PADS/APAVA/TDBRAIN to GPUs 2/3/4/5,

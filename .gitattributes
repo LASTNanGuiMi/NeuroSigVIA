@@ -8,3 +8,7 @@ third_party/medformer/LICENSE -text -whitespace
 third_party/timesnet/models/** -text -whitespace
 third_party/timesnet/layers/** -text -whitespace
 third_party/timesnet/LICENSE -text -whitespace
+third_party/tech/models/** -text -whitespace
+third_party/tech/layers/** -text -whitespace
+third_party/tivit/src/** -text -whitespace
+third_party/tivit/LICENSE -text -whitespace

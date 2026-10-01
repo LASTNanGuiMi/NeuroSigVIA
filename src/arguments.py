@@ -611,6 +611,12 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--image_representation", choices=["activity_graph", "multivariate_heatmap", "patch_heatmap", "ordinary_line", "adaptive_heatmap", "gaf", "tivit_grayscale"],
+        default="activity_graph", help="Replace the full line/activity-graph visual path with one heatmap."
+    )
+    parser.add_argument("--heatmap_patch_size", type=int, default=8)
+
+    parser.add_argument(
         "--modal_interaction",
         type=str,
         choices=[
@@ -700,6 +706,30 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--granularity_region_length",
+        type=int,
+        default=16,
+        help="Length R of the regions inside one outer patch that the gate routes (main method: 16)",
+    )
+
+    parser.add_argument(
+        "--granularity_candidates",
+        type=lambda text: [int(value) for value in str(text).split(",")],
+        default=[4, 8, 16],
+        help="Comma-separated candidate block lengths Q; each must divide the region length (main method: 4,8,16)",
+    )
+
+    parser.add_argument(
+        "--fixed_granularity",
+        type=int,
+        default=None,
+        help=(
+            "Ablation: route every region to this block length, one of --granularity_candidates "
+            "(gate frozen, graph tokens precomputed)"
+        ),
+    )
+
+    parser.add_argument(
         "--granularity_graph_token_grid",
         type=int,
         default=4,
@@ -773,6 +803,9 @@ def parse_args():
         default="ts",
         help="Which branch acts as the query in cross_attn_gate",
     )
+
+    parser.add_argument("--temporal_visual_fusion", choices=["concat_attn", "concat", "masked_pretrain", "cross_attn_gate"], default="concat_attn", help="Final fusion within the adaptive_granularity main path")
+    parser.add_argument("--disable_alignment", action="store_true", help="Do not instantiate or execute the InfoNCE alignment module")
 
     parser.add_argument(
         "--mask_prob",
@@ -1417,10 +1450,20 @@ def parse_args():
             parser.error("adaptive_granularity requires --mantis")
         if args.moment:
             parser.error("adaptive_granularity does not use MOMENT")
-        if args.outer_patch_size != 64:
+        candidates = args.granularity_candidates
+        if args.granularity_region_length < 1 or len(set(candidates)) != len(candidates) or any(
+            value < 1 or args.granularity_region_length % value != 0 for value in candidates
+        ):
             parser.error(
-                "adaptive_granularity currently defines each outer window as "
-                "exactly 64 samples"
+                "--granularity_candidates must be distinct positive divisors of "
+                "--granularity_region_length"
+            )
+        if args.fixed_granularity is not None and args.fixed_granularity not in candidates:
+            parser.error("--fixed_granularity must be one of --granularity_candidates")
+        if args.outer_patch_size % args.granularity_region_length != 0:
+            parser.error(
+                "adaptive_granularity requires --outer_patch_size to be a multiple "
+                "of --granularity_region_length (main method: 64 and 16)"
             )
         if args.granularity_graph_token_grid != 4:
             parser.error(

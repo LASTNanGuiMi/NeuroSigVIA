@@ -944,8 +944,8 @@ if __name__ == "__main__":
                 "activity_graph_plot_bounds_note": (
                     "paper_underreported_explicit_per_signal_minmax"
                 ),
-                "granularity_candidates": [4, 8, 16],
-                "granularity_region_length": 16,
+                "granularity_candidates": list(args.granularity_candidates),
+                "granularity_region_length": args.granularity_region_length,
                 "granularity_selection_training": (
                     "hard_straight_through_gumbel_softmax"
                 ),
@@ -965,18 +965,21 @@ if __name__ == "__main__":
                     "cross_attention"
                 ),
                 "graph_spatial_token_grid": args.granularity_graph_token_grid,
-                "alignment_scope": (
-                    "symmetric_within_sample_N_by_N_visual_mantis_no_cross_"
-                    "batch_negatives"
-                ),
+                "alignment_enabled": not args.disable_alignment,
+                "alignment_scope": (None if args.disable_alignment else
+                    "symmetric_within_sample_N_by_N_visual_mantis_no_cross_batch_negatives"),
                 "alignment_dim": args.patch_alignment_dim,
                 "alignment_temperature": args.patch_alignment_temperature,
                 "alignment_weight": args.patch_alignment_weight,
-                "temporal_visual_fusion": "concat_attn",
-                "temporal_visual_fusion_semantics": (
-                    "branch_projection_then_two_token_self_attention_then_"
-                    "flatten"
-                ),
+                "temporal_visual_fusion": args.temporal_visual_fusion,
+                "temporal_visual_fusion_semantics": {
+                    "concat_attn": "branch_projection_then_two_token_self_attention_then_flatten",
+                    "concat": "direct_concatenation_of_visual_and_temporal_tokens",
+                    "cross_attn_gate": "numeric_query_visual_context_cross_attention_with_gate",
+                    "masked_pretrain": "branch_projection_then_concat_mlp_with_training_only_masked_reconstruction_pretraining",
+                }[args.temporal_visual_fusion],
+                "masked_pretrain_epochs": args.pretrain_epochs if args.temporal_visual_fusion == "masked_pretrain" else 0,
+                "mask_prob": args.mask_prob if args.temporal_visual_fusion == "masked_pretrain" else None,
                 "temporal_visual_branch_order": [
                     "cross_attention_visual",
                     "mantis_temporal",
@@ -988,6 +991,24 @@ if __name__ == "__main__":
                 "historical_path": "patch_fusion",
             }
         )
+        if args.image_representation != "activity_graph":
+            if args.disable_alignment or args.temporal_visual_fusion != "concat_attn" or args.patch_alignment_weight <= 0:
+                raise ValueError("Heatmap image ablations require joint contrastive alignment then concat_attn")
+            for key in list(run_protocol):
+                if key.startswith(("activity_graph_", "granularity_", "graph_spatial_", "line_plot_")):
+                    del run_protocol[key]
+            run_protocol.update(
+                architecture="neurosigvia_heatmap_aligned_concat_attn_v1",
+                image_representation=args.image_representation,
+                image_mode=args.image_representation,
+                heatmap_patch_size=args.heatmap_patch_size,
+                heatmaps_per_valid_window=1,
+                visual_fusion="single_frozen_heatmap_embedding",
+                fusion_input="aligned_projected_features",
+                visual_cross_attention_enabled=False,
+                granularity_selection_enabled=False,
+                temporal_visual_branch_order=["aligned_visual", "aligned_temporal"],
+            )
     elif patch_fusion_enabled:
         run_protocol.update(
             {
@@ -1392,8 +1413,8 @@ if __name__ == "__main__":
                 num_samples=args.save_activity_lineplot_samples,
             )
         elif (
-            args.image_mode == "multichannel_line_plot"
-            or adaptive_graph_enabled
+            (args.image_mode == "multichannel_line_plot" or adaptive_graph_enabled)
+            and args.image_representation == "activity_graph"
         ):
             save_activity_lineplot_samples(
                 result_dir=result_dir,
@@ -1478,7 +1499,7 @@ if __name__ == "__main__":
                     aggregation=args.aggregation,
                     stride=args.stride,
                     patch_size=p,
-                    image_mode=args.image_mode,
+                    image_mode=(args.image_mode if args.image_representation == "activity_graph" else "line_plot"),
                     activity_graph_patch_lengths=args.activity_graph_patch_lengths,
                     activity_graph_channel_mix=args.activity_graph_channel_mix,
                     activity_graph_router_temperature=(
@@ -1593,6 +1614,11 @@ if __name__ == "__main__":
                             runtime_identity=adaptive_runtime_identity,
                             static_encoder_contract=static_encoder_contract,
                         )
+                        if args.image_representation != "activity_graph":
+                            from src.heatmap_cache import augment_heatmap_signature
+                            feature_cache_signature = augment_heatmap_signature(
+                                feature_cache_signature, args.image_representation,
+                                args.heatmap_patch_size)
                         # 将完整签名压成目录键，按数据集隔离保存缓存，并写出可审计的签名清单。
                         feature_cache_key = hashlib.sha256(
                             feature_cache_signature.encode("utf-8")
@@ -1612,7 +1638,7 @@ if __name__ == "__main__":
                             "signature": json.loads(feature_cache_signature),
                         }
                         # 旧静态缓存仅通过已知代码兼容性与签名校验后才允许迁入当前命名空间。
-                        if adaptive_graph_enabled and args.reuse_static_cache_dir:
+                        if adaptive_graph_enabled and args.reuse_static_cache_dir and args.image_representation == "activity_graph":
                             legacy_signatures = {}
                             legacy_skip_reason = None
                             if cache_manifest["signature"]["split_seed"] == 42:
@@ -1718,6 +1744,12 @@ if __name__ == "__main__":
                                     args.patch_alignment_temperature
                                 ),
                                 alignment_weight=args.patch_alignment_weight,
+                                temporal_visual_fusion=args.temporal_visual_fusion,
+                                alignment_enabled=not args.disable_alignment,
+                                mask_prob=args.mask_prob,
+                                pretrain_epochs=args.pretrain_epochs,
+                                image_representation=args.image_representation,
+                                heatmap_patch_size=args.heatmap_patch_size,
                                 outer_patch_size=args.outer_patch_size,
                                 outer_patch_stride=args.outer_patch_stride,
                                 visual_encode_batch_size=(
@@ -1757,6 +1789,9 @@ if __name__ == "__main__":
                                     args.granularity_gate_checkpoint
                                 ),
                                 freeze_gate=args.granularity_freeze_gate,
+                                fixed_granularity=args.fixed_granularity,
+                                granularity_region_length=args.granularity_region_length,
+                                granularity_candidates=tuple(args.granularity_candidates),
                                 artifact_dir=(
                                     Path(result_dir)
                                     / "adaptive_graph"

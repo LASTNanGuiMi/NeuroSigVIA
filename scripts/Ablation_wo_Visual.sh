@@ -2,8 +2,8 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-# 独立数值分支
-METHOD=NeuroSigVIA_NumericOnly_NoFusion
+# 分支消融 w/o Visual（单数值）：去掉视觉分支，只保留 Mantis 数值分支与分类器。
+METHOD=Ablation_wo_Visual
 source scripts/lib/explicit_experiments.sh
 
 (

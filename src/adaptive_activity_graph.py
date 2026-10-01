@@ -10,7 +10,7 @@ adjacency, channel propagation, or occurrence weighting is used.
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Sequence, Any, Optional
 
 import torch
 import torch.nn as nn
@@ -57,6 +57,8 @@ class AdaptiveActivityGraphRenderer(nn.Module):
         canvas_size: int = PAPER_ACTIVITY_GRAPH_CANVAS_SIZE,
         line_width: float = 1.0,
         vertical_margin: float = 0.05,
+        region_length: int = 16,
+        granularities: Sequence[int] = (4, 8, 16),
     ) -> None:
         super().__init__()
         if isinstance(img_size, bool) or not isinstance(img_size, int) or img_size < 1:
@@ -93,7 +95,11 @@ class AdaptiveActivityGraphRenderer(nn.Module):
             checkpoint=gate_checkpoint,
             freeze=freeze_gate,
             strict_checkpoint=strict_gate_checkpoint,
+            region_length=region_length,
+            granularities=granularities,
         )
+        self.region_length = self.gate.region_length
+        self.granularities = self.gate.granularities
 
     @staticmethod
     def provenance() -> dict[str, Any]:

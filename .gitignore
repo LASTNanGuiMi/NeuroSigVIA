@@ -219,3 +219,5 @@ anonymous_artifact.*
 !/third_party/medformer/models/*.py
 !/third_party/timesnet/models/
 !/third_party/timesnet/models/*.py
+!/third_party/tech/models/
+!/third_party/tech/models/*.py

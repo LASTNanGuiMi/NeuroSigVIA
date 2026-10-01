@@ -16,7 +16,7 @@ import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Sequence, Any, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -103,8 +103,23 @@ class AdaptiveGranularityGate(nn.Module):
         checkpoint: Optional[CheckpointLike] = None,
         freeze: bool = False,
         strict_checkpoint: bool = True,
+        region_length: int = 16,
+        granularities: Sequence[int] = (4, 8, 16),
     ) -> None:
         super().__init__()
+        # 区域长度 R 与候选块长 Q 默认是主方法的 16 与 4/8/16；粒度尺度消融可改为更大的 R 和 Q。
+        granularities = tuple(int(value) for value in granularities)
+        if isinstance(region_length, bool) or int(region_length) < 1:
+            raise ValueError(f"region_length must be a positive integer, got {region_length}")
+        if not granularities or len(set(granularities)) != len(granularities) or any(
+            value < 1 or int(region_length) % value != 0 for value in granularities
+        ):
+            raise ValueError(
+                "granularities must be distinct positive divisors of region_length, "
+                f"got {granularities} for region_length {region_length}"
+            )
+        self.region_length = int(region_length)
+        self.granularities = granularities
         if not math.isfinite(temperature) or temperature <= 0.0:
             raise ValueError(f"temperature must be positive, got {temperature}")
         self.temperature = float(temperature)
@@ -246,7 +261,16 @@ class AdaptiveGranularityGate(nn.Module):
         clean_probs = F.softmax(clean_logits, dim=-1)
 
         # 仅在训练且门控可训练时加入 Gumbel 噪声，并用温度调节软权重。
-        if self.training and not self.gate_frozen:
+        fixed_index = getattr(self, "fixed_index", None)
+        if fixed_index is not None:
+            # 固定粒度消融：所有有效区域一律选同一块长；训练与评估相同，不经门控路由。
+            indices = torch.full(clean_logits.shape[:-1], int(fixed_index), dtype=torch.long, device=clean_logits.device)
+            hard_weights = F.one_hot(indices, num_classes=len(self.granularities)).to(dtype=clean_logits.dtype)
+            route_logits = clean_logits
+            clean_probs = hard_weights
+            soft_weights = hard_weights
+            weights = hard_weights
+        elif self.training and not self.gate_frozen:
             gumbel_noise = -torch.empty_like(clean_logits).exponential_(
                 generator=generator
             ).log()

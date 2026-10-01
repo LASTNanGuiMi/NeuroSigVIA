@@ -1,0 +1,12 @@
+{
+  "upstream": "TiViT",
+  "source_repository": "https://github.com/ExplainableML/TiViT",
+  "commit": "5faafcd04db4815bdf32a06740f6a85a52f1bff3",
+  "sha256": {
+    "src/tivit.py": "85b57cc21dbf593ace2b899bbae836feca8fb013cf02df0554ae90492ef4ad89",
+    "src/embedding.py": "16ff8653b4b7502dc9a3245844940e31ab4187ca70a1bf8e4d3a0a56c2ebc344",
+    "src/classifier.py": "73eeac2db3de7c292c3ce497bb80f144e221856f2bb05a7b402eb73920aa774a",
+    "src/utils.py": "7a56ea40e57ddc2c866ee94c07d0fca85b5b8a65989a24d2f25e15a30432dea1",
+    "LICENSE": "3493a37d906057b04439b647af2518dbb6b4c5efe82cee44a3ed63a384e1d3e0"
+  }
+}

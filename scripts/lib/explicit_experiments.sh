@@ -151,7 +151,7 @@ python() {
   while ((i < count)); do
     option="${supplied[i]%%=*}"
     case "$option" in
-      --random_seed|--seed) category=seed ;;
+      --random_seed|--seed|--seeds) category=seed ;;
       --result_dir|--output) category=result ;;
       --feature_cache_dir|--dataset|--datasets|--dataset_names|--model|--data_dir|--wearable_label_mode|--eeg_protocol|--eeg_normalization|--reference-run)
         category="$option" ;;

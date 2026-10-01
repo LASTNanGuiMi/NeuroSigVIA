@@ -1,0 +1,13 @@
+{
+  "upstream": "TeCh",
+  "source_repository": "https://github.com/Levi-Ackman/TeCh",
+  "commit": "9a378cc546a5d97c871eff282148175b3c7cd75b",
+  "line_endings": "CRLF, as the copy used for every reported TeCh run; upstream stores LF",
+  "sha256": {
+    "models/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "models/TeCh.py": "ef2b52b017c58b08c3342233ad735aa3e67448e9023467e3676a3cbdbab27382",
+    "layers/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "layers/Transformer_EncDec.py": "268d8d5486685bdc45a1f8c44056a85d7e327f70e973a8b9e50d63675e352c2d",
+    "layers/Augmentation.py": "66efc195265bdcf25c12257b24c0d95a044e84b53e865bad25cf3dc30fe2af89"
+  }
+}

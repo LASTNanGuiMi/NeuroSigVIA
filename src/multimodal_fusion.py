@@ -6,10 +6,10 @@ signals are routed and rendered by
 The resulting Activity Graph keeps a small spatial token grid so a pooled
 line-plot token can act as a genuine query over multiple graph keys/values.
 
-The final temporal/visual classifier reuses NeuroSigVIA's existing
-``concat_attn`` interaction: project the visual and temporal branches, apply
-self-attention over the two branch tokens, flatten the attended tokens, and
-pass that representation to the classifier MLP.  The Line-Q/Graph-KV
+The final temporal/visual classifier defaults to NeuroSigVIA's existing
+``concat_attn`` interaction.  Controlled ablations also reuse the legacy
+``concat`` and ``masked_pretrain`` fusion implementations, optionally removing
+the contrastive alignment module entirely.  The Line-Q/Graph-KV
 cross-attention in this file remains responsible only for the two visual views.
 """
 
@@ -132,8 +132,8 @@ class AdaptiveGranularityFusionModule(nn.Module):
     The line token is the query and graph spatial tokens are keys/values.  The
     resulting visual token is aligned with the channel-pooled Mantis token by
     symmetric within-sample InfoNCE.  Classification uses the repository's
-    existing ``concat_attn`` interaction followed by valid-duration pooling
-    and an MLP head.
+    selected legacy fusion interaction followed by valid-duration pooling
+    and an MLP head.  Alignment can be removed for fusion replacement ablations.
     """
 
     def __init__(
@@ -152,6 +152,9 @@ class AdaptiveGranularityFusionModule(nn.Module):
         alignment_temperature: float = 0.1,
         cross_attention_ffn_hidden_dim: int | None = None,
         cross_attention_bias: bool = True,
+        temporal_visual_fusion: str = "concat_attn",
+        alignment_enabled: bool = True,
+        mask_prob: float = 0.3,
     ) -> None:
         super().__init__()
 
@@ -195,6 +198,17 @@ class AdaptiveGranularityFusionModule(nn.Module):
                 f"{type(cross_attention_bias).__name__}"
             )
 
+        if temporal_visual_fusion not in {"concat_attn", "concat", "masked_pretrain", "cross_attn_gate"}:
+            raise ValueError(f"unsupported temporal_visual_fusion: {temporal_visual_fusion}")
+        if not isinstance(alignment_enabled, bool):
+            raise TypeError("alignment_enabled must be bool")
+        mask_prob = float(mask_prob)
+        if not math.isfinite(mask_prob) or not 0.0 <= mask_prob <= 1.0:
+            raise ValueError("mask_prob must be finite and in [0, 1]")
+        self.alignment_enabled = alignment_enabled
+        self.mask_prob = mask_prob
+        self.temporal_visual_fusion_strategy = temporal_visual_fusion
+
         self.visual_dim = visual_dim
         self.temporal_dim = temporal_dim
         self.num_channels = num_channels
@@ -218,19 +232,21 @@ class AdaptiveGranularityFusionModule(nn.Module):
             dropout=dropout,
             bias=cross_attention_bias,
         )
-        self.alignment = MaskedIntraSampleInfoNCE(
-            temporal_dim=fusion_dim,
-            visual_dim=fusion_dim,
-            projection_dim=alignment_dim,
-            temperature=alignment_temperature,
+        self.alignment = (
+            MaskedIntraSampleInfoNCE(
+                temporal_dim=fusion_dim,
+                visual_dim=fusion_dim,
+                projection_dim=alignment_dim,
+                temperature=alignment_temperature,
+            )
+            if alignment_enabled else None
         )
-        # Reuse the exact concat_attn semantics of the legacy MLP path:
-        # branch-specific projections -> two-token self-attention -> flatten.
+        # Reuse the selected legacy FusionModule without changing its semantics.
         # The branch order matches the historical feature extractor, where
         # visual branches precede the Mantis branch.
         self.temporal_visual_fusion = FusionModule(
             branch_dims=[fusion_dim, fusion_dim],
-            modal_interaction="concat_attn",
+            modal_interaction=temporal_visual_fusion,
             fusion_dim=fusion_dim,
             fusion_heads=fusion_heads,
             branch_names=["cross_attention_visual", "mantis_temporal"],
@@ -262,6 +278,9 @@ class AdaptiveGranularityFusionModule(nn.Module):
                 cross_attention_ffn_hidden_dim
             ),
             "cross_attention_bias": cross_attention_bias,
+            "temporal_visual_fusion": temporal_visual_fusion,
+            "alignment_enabled": alignment_enabled,
+            "mask_prob": mask_prob,
         }
         self.configuration: dict[str, Any] = {
             **self.constructor_configuration,
@@ -274,10 +293,20 @@ class AdaptiveGranularityFusionModule(nn.Module):
             ),
             "visual_token_count": OPENCLIP_SPATIAL_TOKEN_COUNT,
             "temporal_pooling": "trainable_mantis_channel_attention",
-            "alignment": "symmetric_intra_sample_patch_infonce",
-            "temporal_visual_fusion": "concat_attn",
-            "temporal_visual_fusion_semantics": (
-                "branch_projection_then_two_token_self_attention_then_flatten"
+            "alignment": (
+                "symmetric_intra_sample_patch_infonce" if alignment_enabled else "disabled"
+            ),
+            "temporal_visual_fusion": temporal_visual_fusion,
+            "temporal_visual_fusion_semantics": {
+                "concat_attn": "branch_projection_then_two_token_self_attention_then_flatten",
+                "concat": "raw_branch_concatenation",
+                "cross_attn_gate": "numeric_query_visual_context_cross_attention_with_gate",
+                "masked_pretrain": "branch_projection_then_two_layer_mlp_with_prior_masked_branch_reconstruction",
+            }[temporal_visual_fusion],
+            "masked_pretrain_semantics": (
+                "batchwise_bernoulli_then_uniform_single_branch_zero_mask_"
+                "projected_target_mse_without_target_detach"
+                if temporal_visual_fusion == "masked_pretrain" else None
             ),
             "temporal_visual_branch_order": [
                 "cross_attention_visual",
@@ -417,8 +446,19 @@ class AdaptiveGranularityFusionModule(nn.Module):
         valid_fraction: torch.Tensor,
         *,
         return_attention_weights: bool = False,
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor | None]]:
-        """Return sample logits and patch-level fusion diagnostics."""
+        pretrain: bool = False,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Return logits and diagnostics, optionally including legacy masked MSE.
+
+        Pretraining masks one complete modality for all valid patches in a
+        minibatch with ``mask_prob`` probability.  Projected targets retain the
+        legacy gradient path; the caller restricts pretraining updates to the
+        temporal/visual FusionModule and uses the training split only.
+        """
+        if not isinstance(pretrain, bool):
+            raise TypeError("pretrain must be bool")
+        if pretrain and self.temporal_visual_fusion_strategy != "masked_pretrain":
+            raise ValueError("pretrain=True requires temporal_visual_fusion=masked_pretrain")
 
         # 输入轴含义：B=数据窗口数，N=每窗口的外层 patch 数，P=图像空间 token 数。
         # TDBRAIN 使用 256 点窗口、64/64 外层切分时 N=4，当前图像网格 P=16：
@@ -455,11 +495,14 @@ class AdaptiveGranularityFusionModule(nn.Module):
 
         # visual_tokens 同为 [B,N,F]；InfoNCE 在同一数据窗口内部构造 [N_valid,N_valid] 相似度，
         # 对齐相同 patch 的视觉/时序表示。返回标量损失，不在 batch 样本间构造负样本。
-        alignment_loss = self.alignment(
-            temporal_tokens,
-            visual_tokens,
-            mask,
-            valid_fraction=fractions,
+        alignment_loss = (
+            self.alignment(
+                temporal_tokens,
+                visual_tokens,
+                mask,
+                valid_fraction=fractions,
+            )
+            if self.alignment is not None else temporal_tokens.new_zeros(())
         )
         batch_size, patch_count, _ = visual_tokens.shape
         flat_mask = mask.reshape(-1)
@@ -468,12 +511,23 @@ class AdaptiveGranularityFusionModule(nn.Module):
         flat_temporal = temporal_tokens.reshape(batch_size * patch_count, -1)
         # 只取 M_valid 个有效 patch：两路 [M_valid,F] -> 双 token [M_valid,2,F] -> [M_valid,2F]。
         # 这里的自注意力沿两种分支交互；时间 patch 间的最终合并在 valid_fraction_weighted_pool 完成。
-        valid_patch_features = self.temporal_visual_fusion(
-            [
-                flat_visual.index_select(0, valid_indices),
-                flat_temporal.index_select(0, valid_indices),
-            ]
-        )
+        valid_branches = [
+            flat_visual.index_select(0, valid_indices),
+            flat_temporal.index_select(0, valid_indices),
+        ]
+        valid_patch_features = self.temporal_visual_fusion(valid_branches)
+        reconstruction_loss = valid_patch_features.new_zeros(())
+        reconstruction_applied = False
+        masked_branch_index = None
+        if pretrain:
+            reconstruction = self.temporal_visual_fusion.reconstruct_masked(
+                valid_branches, mask_prob=self.mask_prob
+            )
+            if reconstruction is not None:
+                prediction, target, masked_branch_index = reconstruction
+                # Preserve the legacy nondetached projected-target objective.
+                reconstruction_loss = F.mse_loss(prediction, target)
+                reconstruction_applied = True
         flat_patch_features = valid_patch_features.new_zeros(
             batch_size * patch_count,
             self.temporal_visual_fusion.output_dim,
@@ -501,6 +555,9 @@ class AdaptiveGranularityFusionModule(nn.Module):
 
         return logits, {
             "alignment_loss": alignment_loss,
+            "reconstruction_loss": reconstruction_loss,
+            "reconstruction_applied": reconstruction_applied,
+            "masked_branch_index": masked_branch_index,
             "temporal_tokens": temporal_tokens,
             "visual_tokens": visual_tokens,
             "patch_features": patch_features,
