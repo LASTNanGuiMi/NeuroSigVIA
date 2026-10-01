@@ -20,7 +20,7 @@ class _TinyEncoder(torch.nn.Module):
         self.processor = SimpleNamespace(transforms=["resize=224", "normalize"])
         self.layer_idx = 14
         self.aggregation = "mean"
-        self.image_mode = "med_activity_graph"
+        self.image_mode = "multiscale_activity_graph"
 
 
 def encoder(previous=False, suffix="OpenCLIP", module=None):
@@ -96,7 +96,7 @@ class RenameCompatibilityTests(unittest.TestCase):
                     ("--timemosaic_gate_temperature", "0.5"),
                     ("--timemosaic_selector_balance_weight", "0.001"),
                     ("--timemosaic_graph_token_grid", "4"),
-                    ("--timemosaic_gate_checkpoint", "/tmp/timemosaic/run=42/gate.pt"),
+                    ("--timemosaic_gate_checkpoint", "checkpoints/timemosaic/run=42/gate.pt"),
                     ("--result_dir", "patch_timemosaic_graph"),
                 ]
                 expected_pairs = [
@@ -104,7 +104,7 @@ class RenameCompatibilityTests(unittest.TestCase):
                     ("--granularity_gate_temperature", "0.5"),
                     ("--granularity_balance_weight", "0.001"),
                     ("--granularity_graph_token_grid", "4"),
-                    ("--granularity_gate_checkpoint", "/tmp/timemosaic/run=42/gate.pt"),
+                    ("--granularity_gate_checkpoint", "checkpoints/timemosaic/run=42/gate.pt"),
                     ("--result_dir", "patch_timemosaic_graph"),
                 ]
                 arguments = [option + "=" + value for option, value in pairs] if equals else [token for pair in pairs for token in pair]
@@ -113,6 +113,50 @@ class RenameCompatibilityTests(unittest.TestCase):
                 expected.append("--granularity_freeze_gate")
                 self.assertEqual(normalize_cli_arguments(arguments), expected)
                 self.assertEqual(normalize_cli_arguments(expected), expected)
+
+    def test_previous_patch_interaction_name_is_normalized(self):
+        expected = ["--modal_interaction", "patch_fusion", "--result_dir", "patch_mindts"]
+        arguments = ["--modal_interaction", "patch_mindts", "--result_dir", "patch_mindts"]
+        self.assertEqual(normalize_cli_arguments(arguments), expected)
+        self.assertEqual(
+            normalize_cli_arguments(["--modal_interaction=patch_mindts"]),
+            ["--modal_interaction=patch_fusion"],
+        )
+        self.assertEqual(normalize_cli_arguments(expected), expected)
+
+    def test_previous_activity_graph_options_and_image_mode_are_normalized(self):
+        arguments = [
+            "--image_mode", "med_activity_graph",
+            "--med_activity_granularity_hidden_dim", "64",
+            "--med_activity_patch_lengths=2,4,8",
+            "--result_dir", "med_activity_graph",
+        ]
+        expected = [
+            "--image_mode", "multiscale_activity_graph",
+            "--activity_graph_granularity_hidden_dim", "64",
+            "--activity_graph_patch_lengths=2,4,8",
+            "--result_dir", "med_activity_graph",
+        ]
+        self.assertEqual(normalize_cli_arguments(arguments), expected)
+        self.assertEqual(
+            normalize_cli_arguments(["--image_mode=med_activity_graph"]),
+            ["--image_mode=multiscale_activity_graph"],
+        )
+        self.assertEqual(normalize_cli_arguments(expected), expected)
+
+    def test_previous_image_mode_contract_is_accepted_only_for_the_renamed_mode(self):
+        recorded = encoder()
+        recorded.image_mode = "med_activity_graph"
+        expected = _encoder_contract(recorded, "vision")
+        unchanged = copy.deepcopy(expected)
+        current = encoder()
+        current.load_state_dict(recorded.state_dict())
+        actual = _assert_encoder_contract(expected, current, "vision")
+        self.assertEqual(actual, _encoder_contract(current, "vision"))
+        self.assertEqual(expected, unchanged)
+        current.image_mode = "activity_graph"
+        with self.assertRaisesRegex(ValueError, "image_mode"):
+            _assert_encoder_contract(expected, current, "vision")
 
     def test_only_matching_previous_checkpoint_architecture_is_accepted(self):
         previous = "timemosaic_adaptive_graph_crossattn_concatattn_v2"

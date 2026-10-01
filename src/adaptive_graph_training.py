@@ -1,6 +1,6 @@
 """Training and evaluation for NeuroSigVIA adaptive Activity Graphs.
 
-This module deliberately does not change the legacy ``patch_mindts`` cache or
+This module deliberately does not change the legacy ``patch_fusion`` cache or
 trainer.  Its static cache contains raw temporal windows plus frozen line-plot
 and Mantis features.  During every train/evaluation forward pass, the raw
 windows are routed by ``AdaptiveActivityGraphRenderer`` to form one
@@ -35,12 +35,13 @@ from tqdm import tqdm
 from src.classifier import compute_metrics_from_predictions
 from src.compatibility import (
     is_previous_encoder_wrapper,
+    is_previous_image_mode,
     matches_checkpoint_architecture,
 )
 from src.adaptive_activity_graph import (
     AdaptiveActivityGraphRenderer,
 )
-from src.patch_mindts import (
+from src.patch_fusion import (
     PATCH_TAIL_POLICY,
     _EarlyStoppingMonitor,
     _aggregate_subject_predictions,
@@ -204,6 +205,9 @@ def _assert_encoder_contract(
         comparison["sampled_state_sha256"] = _sampled_module_state_fingerprint(
             encoder, wrapper_identity=expected["wrapper_class"]
         )
+    if is_previous_image_mode(expected.get("image_mode"), current["image_mode"]):
+        comparison = dict(comparison)
+        comparison["image_mode"] = expected["image_mode"]
     compared_keys = (
         "wrapper_class",
         "backbone_class",
@@ -389,6 +393,7 @@ def load_adaptive_graph_feature_cache(
     path = Path(path)
     if not path.is_file():
         return None
+    # 读取时逐项核对缓存版本、签名、切窗参数和标签，防止误用旧特征。
     with np.load(path, allow_pickle=False) as cached:
         required = {
             "schema_version",
@@ -460,6 +465,7 @@ def extract_adaptive_graph_feature_batch(
     vision_model.eval()
     mantis_model.eval()
 
+    # 保留原始窗口及有效长度；静态阶段只提取冻结的折线图与 Mantis 表征。
     temporal = make_temporal_patches(
         batch,
         window_size=window_size,
@@ -480,8 +486,8 @@ def extract_adaptive_graph_feature_batch(
         raise ValueError("feature batch contains no valid temporal windows")
     valid_windows = flat_windows.index_select(0, valid_indices)
     valid_lengths = flat_lengths.index_select(0, valid_indices)
-
     # 只编码 V 个有效内部块：valid_windows=[V,C,L]，valid_lengths=[V]，V<=B*N。
+
     line_valid = _extract_line_tokens(
         valid_windows,
         valid_lengths,
@@ -512,10 +518,9 @@ def extract_adaptive_graph_feature_batch(
     line.index_copy_(0, valid_indices, line_valid.float())
     mantis.index_copy_(0, valid_indices, mantis_valid.float())
     bundle = {
-        # Raw windows remain float32 because the trainable renderer consumes
-        # them online; the two frozen representations use compact float16.
         # 缓存契约：raw=[B,N,C,L] float32；line=[B,N,Dv]、mantis=[B,N,C,Dt] float16。
         # mask=[B,N] bool，fraction=[B,N] 为有效长度/L，lengths=[B,N] 为有效采样点数。
+        # 原始窗口保留 float32 供在线可训练渲染器使用；两种冻结表征以 float16 缓存。
         "raw_windows": flat_windows.reshape(
             batch_size,
             patch_count,
@@ -552,6 +557,7 @@ def _extract_static_split(
     encode_batch_size: int,
     expected_channels: int,
 ) -> dict[str, torch.Tensor]:
+    # 缓存必须按源数据顺序生成，才能与外部标签及受试者索引逐行对齐。
     # 每批仅替换 B 轴；拼接后首轴为整个 split 的输入窗口数 M，内部块数 N 始终保留。
     if not isinstance(loader.sampler, SequentialSampler):
         raise ValueError(
@@ -629,6 +635,7 @@ def _get_static_split(
             stride=stride,
             expected_channels=expected_channels,
         )
+        # 命中已校验的静态缓存即可复用；自适应图像与图特征仍在训练时重算。
         if cached is not None:
             return cached
     bundle = _extract_static_split(
@@ -809,6 +816,7 @@ class NeuroSigVIAClassifier(nn.Module):
     ) -> torch.Tensor:
         # images=[V_chunk,3,224,224]；ViT-H/14 固定层输出 [V_chunk,257,1280]。
         # 257=1 个 CLS+16*16 个空间 token；在线图先保留空间结构，不能在这里全局均值池化。
+        # 冻结视觉编码器参数仍须保留图像输入的梯度，检查点重算只用于节省显存。
         if (
             use_gradient_checkpointing
             and torch.is_grad_enabled()
@@ -876,6 +884,7 @@ class NeuroSigVIAClassifier(nn.Module):
             chunk_indices = valid_indices[start : start + encode_batch_size]
             chunk_raw = flat_raw.index_select(0, chunk_indices)
             chunk_lengths = flat_lengths.index_select(0, chunk_indices)
+            # 对有效窗口在线渲染，再经可微视觉编码器把损失梯度传回粒度门控。
             images, diagnostics = self.renderer(
                 chunk_raw,
                 valid_lengths=chunk_lengths,
@@ -931,6 +940,7 @@ class NeuroSigVIAClassifier(nn.Module):
                 valid_tokens.shape[2],
             )
         )
+        # 将有效窗口的图特征放回原位置；填充窗口保持零值并由掩码排除。
         flat_tokens = flat_tokens.index_copy(0, valid_indices, valid_tokens)
 
         probability_sum = torch.stack(probability_sums).sum(dim=0)
@@ -938,6 +948,7 @@ class NeuroSigVIAClassifier(nn.Module):
         decision_count = torch.stack(decision_counts).sum().clamp_min(1.0)
         soft_usage = probability_sum / decision_count
         hard_usage = hard_sum / decision_count
+        # 按有效区域汇总粒度概率，以偏离均匀使用率的程度构造门控平衡损失。
         uniform = torch.full_like(soft_usage, 1.0 / soft_usage.numel())
         balance_loss = (soft_usage - uniform).abs().mean()
         mean_entropy = torch.stack(entropy_sums).sum() / decision_count
@@ -990,6 +1001,7 @@ class NeuroSigVIAClassifier(nn.Module):
             spatial_grid_size=graph_spatial_grid_size,
             use_gradient_checkpointing=vision_gradient_checkpointing,
         )
+        # 融合静态折线图、在线动态图和逐通道时序特征，输出类别 logits 与辅助损失。
         # fusion 输入 line=[B,N,Dv]、graph=[B,N,16,Dv]、mantis=[B,N,C,Dt]。
         # 内部完成通道注意力、Line-Q/Graph-KV、两模态注意力与 N 轴池化，返回 logits=[B,K]。
         # K 为训练集类别数；TDBRAIN 二分类 K=2，每个 256 点输入最终只对应一行预测。
@@ -1090,7 +1102,9 @@ def _run_epoch(
             graph_spatial_grid_size=graph_spatial_grid_size,
             vision_gradient_checkpointing=vision_gradient_checkpointing,
         )
-        # criterion([B,K],[B])=[B]，均值后 Lce 为标量；当前脚本 L=Lce+0.1*Lalign+0.001*Lbalance。
+        # 总损失由逐样本分类损失、跨模态对齐损失和门控平衡损失按配置加权组成。
+        # criterion([B,K],[B])=[B]，均值后 Lce 为标量；当前脚本 L=Lce+w_align*Lalign+0.001*Lbalance，
+        # 其中 w_align 即 --patch_alignment_weight：PADS 为 0.05，其余数据集为 0.1。
         task_loss = criterion(logits, labels).mean()
         alignment_loss = details["alignment_loss"]
         selector_balance_loss = details["selector_balance_loss"]
@@ -1104,6 +1118,7 @@ def _run_epoch(
         loss.backward()
         # 可训练融合层直接接收梯度；门控经渲染图像与冻结 OpenCLIP 的输入导数接收梯度。
         # 下方检查总梯度存在且非零；若 balance 权重非零，单凭此检查不能隔离证明分类梯度路径。
+        # 总损失反传后校验可训练门控的梯度，避免训练路径静默断开。
         trainable_gate_parameters = [
             parameter
             for parameter in model.renderer.gate.region_cls.parameters()
@@ -1237,6 +1252,7 @@ def _evaluate(
         ).cpu().numpy(),
         "selector_valid_decisions": int(round(valid_count)),
     }
+    # 首先计算输入窗口层面的指标；有受试者索引时额外汇总受试者层面的结果。
     # 这里的窗口是 DataLoader 的原始 256 点样本，不是该样本内部 N=4 个 64 点块。
     window_metrics = compute_metrics_from_predictions(
         details["y_true"],
@@ -1676,6 +1692,7 @@ def train_neurosigvia_classifier(
         ),
     }
 
+    # 优先沿用外部给定的验证集；仅在未提供固定验证集时从训练数据内划分。
     if has_fixed_validation:
         train_indices = list(range(len(train_loader.dataset)))
         val_indices = list(range(len(val_loader.dataset)))
@@ -1725,6 +1742,7 @@ def train_neurosigvia_classifier(
         feature_cache_signature=feature_cache_signature,
         expected_channels=channels,
     )
+    # 此处仅准备测试集静态特征；测试预测在训练结束、恢复最佳验证权重后执行。
     test_features = _get_static_split(
         "test",
         test_loader,
@@ -1756,8 +1774,7 @@ def train_neurosigvia_classifier(
             expected_channels=channels,
         )
 
-    # Reset after optional cold-cache extraction so cache hits and misses start
-    # model initialization and stochastic routing from the same RNG state.
+    # 静态提取后重置随机状态，使缓存命中与首次提取从相同状态初始化模型和随机路由。
     set_random_seed(random_seed)
     fit_loader = _build_static_loader(
         train_features,
@@ -1829,6 +1846,7 @@ def train_neurosigvia_classifier(
         adaptive_gate_checkpoint=gate_checkpoint,
         strict_gate_checkpoint=strict_gate_checkpoint,
     ).to(device)
+    # 优化器仅接收分类器内可训练的参数；外部冻结的视觉和 Mantis 编码器不参与更新。
     optimizer = torch.optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=lr,
@@ -1841,6 +1859,7 @@ def train_neurosigvia_classifier(
         factor=lr_scheduler_factor,
         min_lr=lr_scheduler_min_lr,
     )
+    # 类别权重只根据实际训练索引统计，验证集与测试集不参与损失权重估计。
     if class_weight == "balanced":
         weights = _balanced_class_weights(
             train_label_indices[np.asarray(train_indices, dtype=np.int64)],
@@ -1893,6 +1912,7 @@ def train_neurosigvia_classifier(
             visual_encode_batch_size=visual_encode_batch_size,
             graph_spatial_grid_size=graph_token_grid,
         )
+        # 每轮仅用验证指标选最佳权重，并据此驱动早停与学习率调整。
         selection_key = _checkpoint_selection_key(
             validation_metrics,
             checkpoint_metric_effective,
@@ -1958,6 +1978,7 @@ def train_neurosigvia_classifier(
 
     if best_state is None:
         raise RuntimeError("training did not produce a valid checkpoint")
+    # 恢复验证集选出的最佳权重，再输出最终验证预测与一次测试评估。
     # 验证集每轮参与模型选择；测试标签不进入训练损失，最终测试返回 [M_test,K] 概率矩阵。
     model.load_state_dict(best_state)
     val_metrics, val_details = _evaluate(

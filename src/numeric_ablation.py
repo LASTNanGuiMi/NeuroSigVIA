@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 from src.adaptive_graph_training import NeuroSigVIAClassifier
-from src.patch_mindts import valid_fraction_weighted_pool
+from src.patch_fusion import valid_fraction_weighted_pool
 
 
 LEGACY_ARCHITECTURE = "neurosigvia_numeric_only_zero_visual_slot_v1"
@@ -79,6 +79,15 @@ class NumericOnlyClassifier(nn.Module):
 
     @classmethod
     def from_config(cls, config):
+        if config.get("numeric_standalone"):
+            from src.patch_fusion import ChannelAttentionPool, _MLPHead
+            model = cls.__new__(cls)
+            nn.Module.__init__(model)
+            model.model_config = dict(config)
+            model.classifier_input_dim = int(config["fusion_dim"])
+            model.channel_pool = ChannelAttentionPool(config["temporal_dim"], config["fusion_dim"], config["num_channels"], config["channel_hidden_dim"])
+            model.classifier = _MLPHead(config["fusion_dim"], config["classifier_hidden_dim"], config["classifier_num_layers"], config["dropout"], config["num_classes"])
+            return model
         # A temporary untrained full constructor preserves initialization of
         # the retained channel pool and compatible head layers. No discarded
         # fusion/vision module belongs to the returned model or its forward.

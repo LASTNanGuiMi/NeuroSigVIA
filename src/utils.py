@@ -142,12 +142,12 @@ def save_activity_graph_samples(
     dataloader,
     num_samples,
     image_mode="activity_graph",
-    med_activity_patch_lengths=(2, 4, 8),
-    med_activity_channel_mix=0.35,
-    med_activity_router_temperature=0.2,
-    med_activity_router_mix=0.5,
-    med_activity_adaptive_granularity=False,
-    med_activity_granularity_bank=((1, 2, 4), (2, 4, 8), (4, 8, 16)),
+    activity_graph_patch_lengths=(2, 4, 8),
+    activity_graph_channel_mix=0.35,
+    activity_graph_router_temperature=0.2,
+    activity_graph_router_mix=0.5,
+    activity_graph_adaptive_granularity=False,
+    activity_graph_granularity_bank=((1, 2, 4), (2, 4, 8), (4, 8, 16)),
 ):
     if num_samples <= 0:
         return
@@ -156,20 +156,20 @@ def save_activity_graph_samples(
         transform = lambda batch: preprocess_graph(
             batch, mode="multicolumn", render="waveform"
         )
-    elif image_mode == "med_activity_graph":
-        if med_activity_adaptive_granularity:
+    elif image_mode == "multiscale_activity_graph":
+        if activity_graph_adaptive_granularity:
             transform = TemporalGranularityGraphBank(
-                patch_length_bank=med_activity_granularity_bank,
-                channel_mix=med_activity_channel_mix,
-                router_temperature=med_activity_router_temperature,
-                router_mix=med_activity_router_mix,
+                patch_length_bank=activity_graph_granularity_bank,
+                channel_mix=activity_graph_channel_mix,
+                router_temperature=activity_graph_router_temperature,
+                router_mix=activity_graph_router_mix,
             )
         else:
             transform = ActivityGraphRenderer(
-                patch_lengths=med_activity_patch_lengths,
-                channel_mix=med_activity_channel_mix,
-                router_temperature=med_activity_router_temperature,
-                router_mix=med_activity_router_mix,
+                patch_lengths=activity_graph_patch_lengths,
+                channel_mix=activity_graph_channel_mix,
+                router_temperature=activity_graph_router_temperature,
+                router_mix=activity_graph_router_mix,
             )
     else:
         raise ValueError(f"Unsupported activity graph image mode {image_mode}.")
@@ -183,7 +183,7 @@ def save_activity_graph_samples(
         if graph_images.ndim == 5:
             regime_labels = [
                 "-".join(str(length) for length in regime)
-                for regime in med_activity_granularity_bank
+                for regime in activity_graph_granularity_bank
             ]
             for candidate_images in graph_images:
                 if saved >= num_samples:

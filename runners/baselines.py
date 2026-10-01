@@ -20,7 +20,6 @@ import sys
 import time
 import traceback
 from types import SimpleNamespace
-
 import numpy as np
 import torch
 from sklearn.metrics import (
@@ -30,15 +29,19 @@ from sklearn.metrics import (
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
+
 ROOT = Path(__file__).resolve().parents[1]
 MODELS = ("Medformer", "Crossformer", "FEDformer", "Autoformer", "PatchTST", "Transformer", "TimesNet")
 DATASETS = ("adftd", "tdbrain", "apava", "shimmer10", "pads11")
+# 固定划分标识：APAVA 使用 0917 新划分，其余数据集沿用原固定划分。
+SPLIT_SEEDS = dict(adftd=42, tdbrain=42, apava=20260917, shimmer10=42, pads11=42)
 DEFAULT_BATCH = dict(adftd=8, tdbrain=8, apava=8, shimmer10=1, pads11=4)
 CLASS_NAMES = {"adftd": ["HC", "FTD", "AD"], "tdbrain": ["HC", "PD"],
                "apava": ["HC", "AD"], "shimmer10": ["HC", "PD"], "pads11": ["HC", "PD"]}
 CHECKPOINT_METRICS = ("window_macro_f1", "subject_macro_f1")
 
 
+# 仅按验证集选择权重；窗口 F1 相同时保留更早轮次，受试者模式再比较对数损失。
 def checkpoint_selection_key(validation, checkpoint_metric):
     """Use validation only; equal window F1 keeps the earlier checkpoint."""
     if checkpoint_metric == "window_macro_f1":
@@ -68,6 +71,7 @@ def write_json(path, value):
     path = Path(path)
     temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    # 临时文件写完后原子替换，减少读到不完整状态或指标文件的风险。
     os.replace(temporary, path)
 
 
@@ -148,6 +152,7 @@ def subset_indices(labels, samples_per_class):
 
 def build_loaders(bundle, batch_size, seed, smoke=False, smoke_samples_per_class=2):
     loaders, subject_ids, selected_rows = {}, {}, {}
+    # 沿用固定数据划分；训练种子只控制训练加载顺序，冒烟检查仅缩减训练和验证样本行。
     for split in ("train", "vali", "test"):
         source = getattr(bundle, split + "_loader").dataset
         x = source.tensors[0]
@@ -184,7 +189,7 @@ def import_model(name, vendor_root):
     model_path = vendor_root / "models" / f"{name}.py"
     if not model_path.is_file():
         raise FileNotFoundError(f"Vendored baseline model is missing: {model_path}")
-    # Both upstream projects use the top-level names models/layers/utils.
+    # 两套上游实现共用 models/layers/utils 顶层模块名，导入前检查是否发生来源冲突。
     for package in ("models", "layers", "utils"):
         existing = sys.modules.get(package)
         if existing is not None:
@@ -198,6 +203,7 @@ def import_model(name, vendor_root):
     return module.Model
 
 
+# 保存运行源码摘要、依赖版本和随机性设置，供结果溯源与复现实验使用。
 def source_metadata(vendor_root):
     paths = [Path(__file__), ROOT / "data_loading/experiment.py", ROOT / "src/datautils.py", ROOT / "data_loading/datasets.py"]
     paths.extend(sorted(Path(vendor_root).rglob("*.py")))
@@ -233,6 +239,7 @@ def fixed_model_indices(model):
 
 
 def forward(model, x, device, num_classes):
+    # 数据加载器输出 [批次, 通道, 时间]，上游基线模型接收 [批次, 时间, 通道]。
     x = x.to(device, dtype=torch.float32).transpose(1, 2).contiguous()
     mask = torch.ones(x.shape[:2], dtype=x.dtype, device=device)
     logits = model(x, mask, None, None)
@@ -251,6 +258,7 @@ def evaluate(model, loader, subject_ids, device, num_classes):
         scores.append(forward(model, x, device, num_classes).softmax(dim=-1).cpu().numpy())
         labels.append(y.numpy())
     y_true, probabilities = np.concatenate(labels), np.concatenate(scores)
+    # 保留窗口预测，并以同一受试者的窗口概率均值生成补充的受试者指标。
     aggregated = aggregate_subjects(y_true, probabilities, subject_ids)
     result = metrics(y_true, probabilities)
     result.update({"subject_" + key: value for key, value in metrics(aggregated["subject_y_true"], aggregated["subject_y_score"]).items()})
@@ -266,7 +274,8 @@ def parser():
     cli.add_argument("--model", choices=MODELS, required=True)
     cli.add_argument("--dataset", choices=DATASETS, required=True)
     cli.add_argument("--random_seed", type=int, default=42)
-    cli.add_argument("--split_seed", type=int, choices=(42,), default=42)
+    cli.add_argument("--split_seed", type=int, choices=tuple(sorted(set(SPLIT_SEEDS.values()))),
+                     help="Fixed subject split identity; defaults to the dataset's split (APAVA 20260917, others 42)")
     cli.add_argument("--result_dir", type=Path, required=True)
     cli.add_argument("--vendor_root", type=Path, help="Defaults to the selected model's vendored upstream")
     cli.add_argument("--train_epochs", "--epochs", type=int, default=100)
@@ -301,6 +310,10 @@ def parser():
 def validate_args(args):
     if args.vendor_root is None:
         args.vendor_root = ROOT / "third_party" / ("timesnet" if args.model == "TimesNet" else "medformer")
+    if args.split_seed is None:
+        args.split_seed = SPLIT_SEEDS[args.dataset]
+    if args.split_seed != SPLIT_SEEDS[args.dataset]:
+        raise ValueError(f"{args.dataset} uses split_seed {SPLIT_SEEDS[args.dataset]}, got {args.split_seed}")
     if args.batch_size is None:
         args.batch_size = DEFAULT_BATCH[args.dataset]
     for name in ("batch_size", "train_epochs", "d_model", "d_ff", "e_layers", "n_heads", "patch_len", "stride", "smoke_samples_per_class", "top_k", "num_kernels"):
@@ -332,8 +345,7 @@ def run(args):
     started = time.monotonic()
     device = torch.device(f"cuda:{args.gpu}" if args.device == "cuda" else "cpu")
     seed_training(args.random_seed)
-    # The shared smoke=True helper truncates wearable inputs. Always load the
-    # full audited data and form a row-only smoke subset below instead.
+    # 先读取完整审计数据，再仅按样本行构造冒烟子集，以保持真实序列长度和通道数。
     bundle, data_manifest = load_data(args.dataset, smoke=False)
     if args.dataset in ("adftd", "tdbrain", "apava"):
         split_path = write_eeg_medformer_split_audit(bundle, args.result_dir)
@@ -361,7 +373,7 @@ def run(args):
     write_json(args.result_dir / "source_metadata.json", metadata)
     protocol = {
         "model": args.model, "dataset": args.dataset, "random_seed": args.random_seed,
-        "split_seed": 42, "split_seed_note": "Existing fixed subject assignments; training seed never re-splits data",
+        "split_seed": args.split_seed, "split_seed_note": "Existing fixed subject assignments; training seed never re-splits data",
         "smoke": args.smoke, "scientific_result": not args.smoke,
         "input_layout": "loader [B,C,T] -> model [B,T,C]", "model_config": vars(config),
         "class_names_in_score_column_order": CLASS_NAMES[args.dataset],
@@ -393,6 +405,7 @@ def run(args):
                         else "Unmodified Medformer source") + " retrained with this study's fixed protocol; not original-paper scores",
     }
     write_json(args.result_dir / "protocol.json", protocol)
+    # 类别权重只由训练样本频次计算；逐样本加权交叉熵最终取算术平均。
     counts = np.bincount(y_train.numpy(), minlength=num_classes)
     weights = torch.as_tensor(len(y_train) / (num_classes * counts), dtype=torch.float32, device=device)
     criterion = torch.nn.CrossEntropyLoss(weight=weights, reduction="none")
@@ -415,10 +428,12 @@ def run(args):
             optimizer.step()
             loss_sum += float(loss.detach()) * len(y)
             observations += len(y)
+        # 启用 SWA 时每轮更新参数均值，并用平均模型做验证与最佳权重选择。
         if averaged_model is not None:
             averaged_model.update_parameters(model)
         selection_model = averaged_model if averaged_model is not None else model
         validation, _ = evaluate(selection_model, loaders["vali"], subject_ids["vali"], device, num_classes)
+        # 验证集决定最佳 checkpoint；训练循环不计算测试集指标。
         key = checkpoint_selection_key(validation, args.checkpoint_metric)
         improved = best_key is None or key > best_key
         if improved:
@@ -427,13 +442,14 @@ def run(args):
             checkpoint = {"model_state_dict": {name: tensor.detach().cpu() for name, tensor in checkpoint_model.state_dict().items()},
                           "epoch": epoch, "selection_key": key, "config": vars(config),
                           **selection_metadata(args.checkpoint_metric),
-                          "random_seed": args.random_seed, "split_seed": 42, "smoke": args.smoke,
+                          "random_seed": args.random_seed, "split_seed": args.split_seed, "smoke": args.smoke,
                           "swa": args.swa,
                           "swa_n_averaged": (int(averaged_model.n_averaged.item()) if averaged_model is not None else 0),
                           "fixed_model_indices_outside_state_dict": fixed_model_indices(model)}
             temporary = args.result_dir / "best_checkpoint.tmp.pt"
             torch.save(checkpoint, temporary)
             os.replace(temporary, args.result_dir / "best_checkpoint.pt")
+        # warmup 在这里是早停和调度器的宽限期，不执行学习率线性预热。
         if epoch > args.warmup_epochs:
             if stop_best is None or key[0] > stop_best + args.min_delta:
                 stop_best, stale_epochs = key[0], 0
@@ -450,16 +466,18 @@ def run(args):
         print(f"{args.model} {args.dataset} seed={args.random_seed} epoch={epoch} loss={record['train_loss']:.6f} val_{args.checkpoint_metric}={key[0]:.6f} lr={learning_rate:.3g}", flush=True)
         if args.patience > 0 and epoch > args.warmup_epochs and stale_epochs >= args.patience:
             break
+    # 训练结束后恢复验证集选出的最佳权重，再保存最终预测以便独立复算指标。
     checkpoint = torch.load(args.result_dir / "best_checkpoint.pt", map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state_dict"])
     final_validation, validation_predictions = evaluate(model, loaders["vali"], subject_ids["vali"], device, num_classes)
     np.savez_compressed(args.result_dir / "validation_predictions.npz", **validation_predictions)
     final_test = None
+    # 正式运行仅在此评估一次测试集；冒烟运行不进行测试评估。
     if not args.smoke:
         final_test, test_predictions = evaluate(model, loaders["test"], subject_ids["test"], device, num_classes)
         np.savez_compressed(args.result_dir / "test_predictions.npz", **test_predictions)
     final = {"status": "COMPLETED", "model": args.model, "dataset": args.dataset, "random_seed": args.random_seed,
-             "split_seed": 42, "smoke": args.smoke, "scientific_result": not args.smoke,
+             "split_seed": args.split_seed, "smoke": args.smoke, "scientific_result": not args.smoke,
              **selection_metadata(args.checkpoint_metric), "selection_key": list(best_key),
              "best_epoch": best_epoch, "epochs_run": len(history), "validation": final_validation,
              "test": final_test, "test_evaluation_count": 0 if args.smoke else 1,
@@ -478,7 +496,7 @@ def main():
     args.result_dir.mkdir(parents=True, exist_ok=True)
     if any(args.result_dir.iterdir()):
         raise FileExistsError(f"Refusing to overwrite nonempty result directory: {args.result_dir}")
-    # Exclusive claim also prevents two jobs racing for the same empty directory.
+    # 独占创建运行标记，防止两个任务同时占用同一个空结果目录。
     with (args.result_dir / ".run_claim").open("x", encoding="utf-8") as handle:
         handle.write(str(os.getpid()))
     write_json(args.result_dir / "args.json", {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()})

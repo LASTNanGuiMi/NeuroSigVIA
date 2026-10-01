@@ -17,7 +17,7 @@ if torch is not None:
     from runners.numeric_ablation import (
         build_parser, checkpoint_selection_protocol, validation_selection,
     )
-    from src.patch_mindts import _EarlyStoppingMonitor, _build_patch_lr_scheduler
+    from src.patch_fusion import _EarlyStoppingMonitor, _build_patch_lr_scheduler
 from scripts.summarize_numeric_ablation import (
     METRICS, build_parser as report_parser, checkpoint_protocol,
     collect_report, metric_vector, render_markdown,

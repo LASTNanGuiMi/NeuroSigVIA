@@ -15,6 +15,19 @@ review archive. Git metadata contains development history and local repository
 configuration even when the checked-out source is anonymous. Use a clean export
 of the reviewed source files rather than compressing the working directory.
 
+## Path and identity check
+
+Run from the repository root. The command lists every releasable file that
+still contains a machine-specific absolute path and must print nothing:
+
+```bash
+git ls-files -co --exclude-standard -z -- . ':!ANONYMITY.md' \
+  | xargs -0 grep -nIE '/home/|/Users/|/root/|/mnt/|[A-Za-z]:\\\\'
+```
+
+Also search the same file list for account names, host names and e-mail
+addresses used during development before publishing.
+
 Third-party dataset links, model identifiers, citations, and license attributions
 must remain intact; they identify dependencies and prior work, not the submission
 authors.

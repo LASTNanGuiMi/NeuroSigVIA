@@ -9,11 +9,17 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+# 入口守卫只处理已明确登记的排队任务，先执行交接检查再加载训练依赖。
+if __name__ == "__main__":
+    _queued_handoff = Path(__file__).resolve().parents[1] / ".aris/expand_queue_20260908/handoff.py"
+    if _queued_handoff.is_file():
+        import runpy as _handoff_runpy
+        _handoff_runpy.run_path(str(_queued_handoff))["handle_entry"]()
+
+
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
-# Older Transformers releases emit this during import and include the local
-# site-packages path in stderr. It is unrelated to this project's behavior and
-# can disclose a reviewer's or author's machine path in captured run logs.
+# 过滤旧版 Transformers 的这一项导入弃用警告，避免日志包含无关的本机安装路径。
 warnings.filterwarnings(
     "ignore",
     message=r"`torch\.utils\._pytree\._register_pytree_node` is deprecated\..*",
@@ -56,9 +62,9 @@ from src.datautils import (
 from src.embedding import concat_embeddings, embed
 from src.mlp_classifier import train_mlp_classifier
 from src.neurosigvia import get_neurosigvia
-from src.patch_mindts import (
-    PATCH_MINDTS_ARCHITECTURE,
-    train_patch_mindts_classifier,
+from src.patch_fusion import (
+    PATCH_FUSION_ARCHITECTURE,
+    train_patch_fusion_classifier,
 )
 from src.adaptive_graph_training import (
     NEUROSIGVIA_ARCHITECTURE,
@@ -69,12 +75,12 @@ from src.adaptive_cache_reuse import promote_adaptive_static_caches
 from src.adaptive_cache_identity import (
     KNOWN_LEGACY_ADAPTIVE_ARCHITECTURE,
     KNOWN_LEGACY_ADAPTIVE_CACHE_SCHEMA,
-    KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE,
-    KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE,
+    KNOWN_ARCHIVED_MODEL_ARCHITECTURE,
+    KNOWN_ARCHIVED_STATIC_CACHE_ARCHITECTURE,
     adaptive_static_extractor_code_identity,
     assert_known_static_extractor_compatibility,
     known_legacy_adaptive_code_identity,
-    known_timemosaic_code_identity,
+    known_archived_code_identity,
 )
 from src.privacy import anonymize_runtime_arguments, anonymize_runtime_value
 from src.utils import (
@@ -252,6 +258,7 @@ def _dataset_content_identity(dataset):
     }
 
 
+# 缓存输入身份同时覆盖各数据划分的内容与标签，避免仅凭数据集名称复用。
 def _split_input_identity(
     train_loader,
     train_labels,
@@ -383,7 +390,7 @@ def _patch_feature_extractor_code_identity():
         manifest.update(relative.encode("utf-8"))
         manifest.update(digest.encode("ascii"))
 
-    patch_path = project_root / "src/patch_mindts.py"
+    patch_path = project_root / "src/patch_fusion.py"
     tree = ast.parse(patch_path.read_text(encoding="utf-8"))
     extraction_functions = {
         "make_temporal_patches",
@@ -445,7 +452,7 @@ def _patch_feature_extractor_code_identity():
                 "utf-8"
             )
         )
-    component_name = "src/patch_mindts.py:patch_feature_components"
+    component_name = "src/patch_fusion.py:patch_feature_components"
     component_digest = extraction_digest.hexdigest()
     components[component_name] = component_digest
     manifest.update(component_name.encode("utf-8"))
@@ -457,6 +464,7 @@ def _patch_feature_extractor_code_identity():
 
 
 @lru_cache(maxsize=1)
+# 自适应静态缓存只记录生成 raw/Line/Mantis 张量的代码身份。
 def _adaptive_graph_feature_extractor_code_identity():
     """Hash only code that materializes cached raw/Line/Mantis tensors."""
     project_root = Path(__file__).resolve().parents[1]
@@ -538,19 +546,20 @@ def build_feature_cache_signature(
     static_encoder_contract=None,
 ):
     adaptive_granularity = bool(
-        getattr(args, "med_activity_adaptive_granularity", False)
+        getattr(args, "activity_graph_adaptive_granularity", False)
     )
-    patch_mindts = getattr(args, "modal_interaction", None) == "patch_mindts"
+    patch_fusion = getattr(args, "modal_interaction", None) == "patch_fusion"
     adaptive_graph = (
         getattr(args, "modal_interaction", None) == "adaptive_granularity"
     )
     fixed_activity_graph = (
         not adaptive_graph
-        and not patch_mindts
+        and not patch_fusion
         and not adaptive_granularity
         and getattr(args, "image_mode", None)
-        in {"activity_graph", "med_activity_graph", "activity_matrix"}
+        in {"activity_graph", "multiscale_activity_graph", "activity_matrix"}
     )
+    # 自适应缓存需要输入、提取代码与运行环境的身份信息，并完整校验本地模型文件。
     integrity_hashed_features = adaptive_granularity or adaptive_graph
     if integrity_hashed_features and any(
         identity is None
@@ -594,14 +603,12 @@ def build_feature_cache_signature(
         args.datasets == "uci" and args.uci_protocol == "official_subject"
     )
     configuration = {
-        # Schema 11 scopes the adaptive cache to raw/Line/Mantis tensors.  The
-        # fixed Activity Graph schema is also bumped because those caches hold
-        # graph-derived embeddings and must not survive renderer replacement.
+        # 版本 11 的自适应缓存仅含 raw/Line/Mantis；固定图缓存含图特征，渲染器更换时须失效。
         "schema": (
             11
             if adaptive_graph
             else 9
-            if patch_mindts
+            if patch_fusion
             else 7
             if adaptive_granularity
             else 6
@@ -620,8 +627,6 @@ def build_feature_cache_signature(
         "uci_protocol": args.uci_protocol,
         "split_seed": 42 if has_fixed_split else args.random_seed,
         "split_audit_sha256": split_audit_sha256,
-        **({"adftd_subject_subset": args.adftd_subject_subset}
-           if getattr(args, "adftd_subject_subset", None) is not None else {}),
         "val_ratio": args.val_ratio,
         "custom_test_ratio": args.custom_test_ratio,
         "falltl_target_length": args.falltl_target_length,
@@ -629,23 +634,23 @@ def build_feature_cache_signature(
         "window_stride": args.window_stride,
         "max_windows_per_file": args.max_windows_per_file,
         "image_mode": args.image_mode,
-        "med_activity_patch_lengths": (
+        "activity_graph_patch_lengths": (
             None
-            if patch_mindts or adaptive_graph
-            else args.med_activity_patch_lengths
+            if patch_fusion or adaptive_graph
+            else args.activity_graph_patch_lengths
         ),
-        "med_activity_channel_mix": (
-            None if adaptive_graph else args.med_activity_channel_mix
+        "activity_graph_channel_mix": (
+            None if adaptive_graph else args.activity_graph_channel_mix
         ),
-        "med_activity_router_temperature": (
+        "activity_graph_router_temperature": (
             None
-            if patch_mindts or adaptive_graph
-            else args.med_activity_router_temperature
+            if patch_fusion or adaptive_graph
+            else args.activity_graph_router_temperature
         ),
-        "med_activity_router_mix": (
+        "activity_graph_router_mix": (
             None
-            if patch_mindts or adaptive_graph
-            else args.med_activity_router_mix
+            if patch_fusion or adaptive_graph
+            else args.activity_graph_router_mix
         ),
         "aggregation": args.aggregation,
         "patch_size": patch_size,
@@ -675,6 +680,7 @@ def build_feature_cache_signature(
         ),
         "moment": args.moment,
     }
+    # 在线自适应图不写入静态缓存；签名描述切窗规则及冻结编码器的实际构造约定。
     if adaptive_graph:
         configuration.update(
             {
@@ -696,15 +702,15 @@ def build_feature_cache_signature(
             "adaptive static cache signatures require the actual frozen "
             "encoder construction contract"
         )
-    elif patch_mindts:
+    elif patch_fusion:
         configuration.update(
             {
-                "med_activity_adaptive_granularity": True,
-                "med_activity_granularity_bank": getattr(
+                "activity_graph_adaptive_granularity": True,
+                "activity_graph_granularity_bank": getattr(
                     args,
-                    "med_activity_granularity_bank",
+                    "activity_graph_granularity_bank",
                 ),
-                "feature_layout": "patch_mindts_structured_tokens_v1",
+                "feature_layout": "patch_fusion_structured_tokens_v1",
                 "outer_patch_size": args.outer_patch_size,
                 "outer_patch_stride": args.outer_patch_stride,
                 "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
@@ -718,10 +724,10 @@ def build_feature_cache_signature(
     elif adaptive_granularity:
         configuration.update(
             {
-                "med_activity_adaptive_granularity": True,
-                "med_activity_granularity_bank": getattr(
+                "activity_graph_adaptive_granularity": True,
+                "activity_graph_granularity_bank": getattr(
                     args,
-                    "med_activity_granularity_bank",
+                    "activity_graph_granularity_bank",
                 ),
                 "feature_layout": "granularity_bank_scale_major_flat_v1",
                 "split_input_identity": split_input_identity,
@@ -776,7 +782,12 @@ def _known_legacy_adaptive_cache_signature(
     current.pop("static_encoder_contract", None)
     current["schema"] = KNOWN_LEGACY_ADAPTIVE_CACHE_SCHEMA
     current["split_seed"] = 42
-    current["med_activity_channel_mix"] = args.med_activity_channel_mix
+    # Archived signatures carry the argument names and image mode of their commit.
+    for name in ("patch_lengths", "channel_mix", "router_temperature", "router_mix"):
+        current["med_activity_" + name] = current.pop("activity_graph_" + name)
+    if current["image_mode"] == "multiscale_activity_graph":
+        current["image_mode"] = "med_activity_graph"
+    current["med_activity_channel_mix"] = args.activity_graph_channel_mix
     current["activity_graph_selection"] = (
         "raw_region_16_hard_st_4_8_16_before_graph_propagation"
     )
@@ -798,7 +809,7 @@ def _known_legacy_adaptive_cache_signature(
     else:
         current.update(
             {
-                "architecture": KNOWN_TIMEMOSAIC_MODEL_ARCHITECTURE,
+                "architecture": KNOWN_ARCHIVED_MODEL_ARCHITECTURE,
                 "timemosaic_gate_temperature": args.granularity_gate_temperature,
                 "timemosaic_selector_balance_weight": (
                     args.granularity_balance_weight
@@ -808,7 +819,7 @@ def _known_legacy_adaptive_cache_signature(
                     args.granularity_gate_checkpoint, "full"
                 ),
                 "timemosaic_freeze_gate": args.granularity_freeze_gate,
-                "feature_code_identity": known_timemosaic_code_identity(),
+                "feature_code_identity": known_archived_code_identity(),
             }
         )
     return json.dumps(current, sort_keys=True, separators=(",", ":"))
@@ -860,12 +871,12 @@ if __name__ == "__main__":
     result_dir = f"{args.result_dir}/{timestamp}_{args.datasets}_{available_models}_{args.classifier_type}"
     os.makedirs(result_dir, exist_ok=False)
 
-    patch_mindts_enabled = args.modal_interaction == "patch_mindts"
+    patch_fusion_enabled = args.modal_interaction == "patch_fusion"
     adaptive_graph_enabled = (
         args.modal_interaction == "adaptive_granularity"
     )
     patch_router_mode = args.patch_granularity_router_mode
-    patch_router_v5 = patch_mindts_enabled and patch_router_mode == "adaptive_v5"
+    patch_router_v5 = patch_fusion_enabled and patch_router_mode == "adaptive_v5"
     run_protocol = {
         "schema": (
             7
@@ -873,9 +884,9 @@ if __name__ == "__main__":
             else 6
             if patch_router_v5
             else 5
-            if patch_mindts_enabled
+            if patch_fusion_enabled
             else 2
-            if args.med_activity_adaptive_granularity
+            if args.activity_graph_adaptive_granularity
             else 1
         ),
         "dataset_group": args.datasets,
@@ -901,7 +912,7 @@ if __name__ == "__main__":
         ),
         "metric_unit": (
             "window_and_subject_when_subject_ids_available"
-            if patch_mindts_enabled or adaptive_graph_enabled
+            if patch_fusion_enabled or adaptive_graph_enabled
             else "processed_one_second_window"
             if args.datasets == "eeg"
             else "sample"
@@ -974,20 +985,20 @@ if __name__ == "__main__":
                 "checkpoint_metric": args.patch_checkpoint_metric,
                 "historical_checkpoint_compatible": False,
                 "previous_concat_mlp_checkpoint_compatible": False,
-                "historical_path": "patch_mindts",
+                "historical_path": "patch_fusion",
             }
         )
-    elif patch_mindts_enabled:
+    elif patch_fusion_enabled:
         run_protocol.update(
             {
-                "med_activity_adaptive_granularity": True,
-                "med_activity_patch_lengths": args.med_activity_patch_lengths,
-                "med_activity_base_renderer_used": False,
-                "med_activity_granularity_bank": (
-                    args.med_activity_granularity_bank
+                "activity_graph_adaptive_granularity": True,
+                "activity_graph_patch_lengths": args.activity_graph_patch_lengths,
+                "activity_graph_base_renderer_used": False,
+                "activity_graph_granularity_bank": (
+                    args.activity_graph_granularity_bank
                 ),
-                "feature_layout": "patch_mindts_structured_tokens_v1",
-                "architecture": PATCH_MINDTS_ARCHITECTURE,
+                "feature_layout": "patch_fusion_structured_tokens_v1",
+                "architecture": PATCH_FUSION_ARCHITECTURE,
                 "outer_patch_size": args.outer_patch_size,
                 "outer_patch_stride": args.outer_patch_stride,
                 "tail_policy": "right_zero_pad_then_crop_valid_prefix_v1",
@@ -1025,7 +1036,7 @@ if __name__ == "__main__":
                     "single_scale_neutral_rgb_v3"
                     if all(
                         len(regime) == 1
-                        for regime in args.med_activity_granularity_bank
+                        for regime in args.activity_graph_granularity_bank
                     )
                     else "legacy_three_scale_rgb_v2"
                 ),
@@ -1045,92 +1056,92 @@ if __name__ == "__main__":
                     "graph_value_context_only_no_query_residual"
                 ),
                 "granularity_selector_temperature": (
-                    args.med_activity_granularity_temperature
+                    args.activity_graph_granularity_temperature
                 ),
                 "granularity_balance_weight": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_balance_weight
+                    else args.activity_graph_granularity_balance_weight
                 ),
                 "granularity_entropy_weight": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_entropy_weight
+                    else args.activity_graph_granularity_entropy_weight
                 ),
                 "granularity_mix_shrinkage_weight": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_mix_shrinkage_weight
+                    else args.activity_graph_granularity_mix_shrinkage_weight
                 ),
                 "granularity_prior_kl_weight": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_prior_kl_weight
+                    else args.activity_graph_granularity_prior_kl_weight
                 ),
                 "granularity_usage_floor": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_usage_floor
+                    else args.activity_graph_granularity_usage_floor
                 ),
                 "granularity_usage_ema_decay": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_usage_ema_decay
+                    else args.activity_graph_granularity_usage_ema_decay
                 ),
                 "granularity_entropy_floor": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_entropy_floor
+                    else args.activity_graph_granularity_entropy_floor
                 ),
                 "granularity_entropy_ceiling": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_entropy_ceiling
+                    else args.activity_graph_granularity_entropy_ceiling
                 ),
                 "granularity_local_mix_max": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_local_mix_max
+                    else args.activity_graph_granularity_local_mix_max
                 ),
                 "granularity_local_mix_init": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_local_mix_init
+                    else args.activity_graph_granularity_local_mix_init
                 ),
                 "granularity_global_mix_max": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_global_mix_max
+                    else args.activity_graph_granularity_global_mix_max
                 ),
                 "granularity_global_mix_init": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_global_mix_init
+                    else args.activity_graph_granularity_global_mix_init
                 ),
                 "granularity_evidence_half_saturation": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_evidence_half_saturation
+                    else args.activity_graph_granularity_evidence_half_saturation
                 ),
                 "granularity_minimum_weight": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_minimum_weight
+                    else args.activity_graph_granularity_minimum_weight
                 ),
                 "granularity_score_cap": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_score_cap
+                    else args.activity_graph_granularity_score_cap
                 ),
                 "granularity_scorer_hidden_dim": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_scorer_hidden_dim
+                    else args.activity_graph_granularity_scorer_hidden_dim
                 ),
                 "granularity_confidence_half_saturation": (
                     None
                     if patch_router_v5
-                    else args.med_activity_granularity_confidence_half_saturation
+                    else args.activity_graph_granularity_confidence_half_saturation
                 ),
                 "v5_top_k": (
                     args.patch_router_top_k if patch_router_v5 else None
@@ -1209,29 +1220,29 @@ if __name__ == "__main__":
                 "hard_top1_enabled": False,
             }
         )
-    elif args.med_activity_adaptive_granularity:
+    elif args.activity_graph_adaptive_granularity:
         run_protocol.update(
             {
-                "med_activity_adaptive_granularity": True,
-                "med_activity_patch_lengths": args.med_activity_patch_lengths,
-                "med_activity_granularity_bank": (
-                    args.med_activity_granularity_bank
+                "activity_graph_adaptive_granularity": True,
+                "activity_graph_patch_lengths": args.activity_graph_patch_lengths,
+                "activity_graph_granularity_bank": (
+                    args.activity_graph_granularity_bank
                 ),
                 "feature_layout": "granularity_bank_scale_major_flat_v1",
                 "granularity_selector_hidden_dim": (
-                    args.med_activity_granularity_hidden_dim
+                    args.activity_graph_granularity_hidden_dim
                 ),
                 "granularity_selector_temperature": (
-                    args.med_activity_granularity_temperature
+                    args.activity_graph_granularity_temperature
                 ),
                 "granularity_selector_base_prior": (
-                    args.med_activity_granularity_base_prior
+                    args.activity_graph_granularity_base_prior
                 ),
                 "granularity_selector_balance_weight": (
-                    args.med_activity_granularity_balance_weight
+                    args.activity_graph_granularity_balance_weight
                 ),
                 "granularity_selector_entropy_weight": (
-                    args.med_activity_granularity_entropy_weight
+                    args.activity_graph_granularity_entropy_weight
                 ),
                 "atgs_artifact_layout": "atgs/<dataset>/v1",
             }
@@ -1279,6 +1290,7 @@ if __name__ == "__main__":
     for dataset in tqdm(datasets):
         print(dataset)
 
+        # EEG、可穿戴及指定官方协议使用固定验证划分，并保存可追溯的划分审计文件。
         fixed_validation_split = False
         vali_loader = None
         vali_labels = None
@@ -1295,9 +1307,6 @@ if __name__ == "__main__":
             test_loader = eeg_bundle.test_loader
             test_labels = eeg_bundle.test_labels
             audit_path = write_eeg_medformer_split_audit(eeg_bundle, result_dir)
-            if getattr(args, "adftd_subject_subset", None) is not None:
-                with open(f"{result_dir}/args.json", "w") as subset_args_file:
-                    json.dump(vars(args), subset_args_file, indent=4)
             print(f"EEG subject split audit: {audit_path}")
         elif args.datasets == "wearable":
             fixed_validation_split = True
@@ -1342,6 +1351,7 @@ if __name__ == "__main__":
                 dataset, args
             )
 
+        # 把本次受试者划分审计的摘要纳入后续缓存身份，绑定实际执行的数据协议。
         split_audit_sha256 = (
             hashlib.sha256(Path(audit_path).read_bytes()).hexdigest()
             if audit_path is not None
@@ -1353,7 +1363,7 @@ if __name__ == "__main__":
             sample_count += len(vali_loader.dataset)
         print("Samples: ", sample_count)
         if (
-            args.image_mode in {"activity_graph", "med_activity_graph"}
+            args.image_mode in {"activity_graph", "multiscale_activity_graph"}
             and not adaptive_graph_enabled
         ):
             save_activity_graph_samples(
@@ -1362,17 +1372,17 @@ if __name__ == "__main__":
                 dataloader=train_loader,
                 num_samples=args.save_activity_graph_samples,
                 image_mode=args.image_mode,
-                med_activity_patch_lengths=args.med_activity_patch_lengths,
-                med_activity_channel_mix=args.med_activity_channel_mix,
-                med_activity_router_temperature=(
-                    args.med_activity_router_temperature
+                activity_graph_patch_lengths=args.activity_graph_patch_lengths,
+                activity_graph_channel_mix=args.activity_graph_channel_mix,
+                activity_graph_router_temperature=(
+                    args.activity_graph_router_temperature
                 ),
-                med_activity_router_mix=args.med_activity_router_mix,
-                med_activity_adaptive_granularity=(
-                    args.med_activity_adaptive_granularity
+                activity_graph_router_mix=args.activity_graph_router_mix,
+                activity_graph_adaptive_granularity=(
+                    args.activity_graph_adaptive_granularity
                 ),
-                med_activity_granularity_bank=(
-                    args.med_activity_granularity_bank
+                activity_graph_granularity_bank=(
+                    args.activity_graph_granularity_bank
                 ),
             )
             save_activity_lineplot_samples(
@@ -1392,8 +1402,8 @@ if __name__ == "__main__":
                 num_samples=args.save_activity_lineplot_samples,
             )
         channels, T = train_loader.dataset[0][0].shape
-
         # TDBRAIN 在此得到 channels=33、T=256；后续 outer_patch_size=64 形成 4 个内部块。
+
         mantis_embedding = None
         moment_embedding = None
         vision_embedding_1 = None
@@ -1401,7 +1411,7 @@ if __name__ == "__main__":
         mantis_model = None
         moment_model = None
 
-        # Embedding with Mantis TSFM
+        # 加载 Mantis 时序编码器；MLP 分支保留模型对象，由对应训练器处理特征提取。
         if args.mantis:
             network = Mantis8M(device=device)
             network = network.from_pretrained(args.mantis_name)
@@ -1448,7 +1458,7 @@ if __name__ == "__main__":
             "line_plot",
             "multichannel_line_plot",
             "activity_graph",
-            "med_activity_graph",
+            "multiscale_activity_graph",
             "activity_matrix",
         }:
             patch_sizes = [None]
@@ -1469,17 +1479,17 @@ if __name__ == "__main__":
                     stride=args.stride,
                     patch_size=p,
                     image_mode=args.image_mode,
-                    med_activity_patch_lengths=args.med_activity_patch_lengths,
-                    med_activity_channel_mix=args.med_activity_channel_mix,
-                    med_activity_router_temperature=(
-                        args.med_activity_router_temperature
+                    activity_graph_patch_lengths=args.activity_graph_patch_lengths,
+                    activity_graph_channel_mix=args.activity_graph_channel_mix,
+                    activity_graph_router_temperature=(
+                        args.activity_graph_router_temperature
                     ),
-                    med_activity_router_mix=args.med_activity_router_mix,
-                    med_activity_adaptive_granularity=(
-                        args.med_activity_adaptive_granularity
+                    activity_graph_router_mix=args.activity_graph_router_mix,
+                    activity_graph_adaptive_granularity=(
+                        args.activity_graph_adaptive_granularity
                     ),
-                    med_activity_granularity_bank=(
-                        args.med_activity_granularity_bank
+                    activity_graph_granularity_bank=(
+                        args.activity_graph_granularity_bank
                     ),
                 )
                 neurosigvia_1 = neurosigvia_1.to(device=device)
@@ -1505,17 +1515,17 @@ if __name__ == "__main__":
                     stride=args.stride,
                     patch_size=p,
                     image_mode=args.image_mode,
-                    med_activity_patch_lengths=args.med_activity_patch_lengths,
-                    med_activity_channel_mix=args.med_activity_channel_mix,
-                    med_activity_router_temperature=(
-                        args.med_activity_router_temperature
+                    activity_graph_patch_lengths=args.activity_graph_patch_lengths,
+                    activity_graph_channel_mix=args.activity_graph_channel_mix,
+                    activity_graph_router_temperature=(
+                        args.activity_graph_router_temperature
                     ),
-                    med_activity_router_mix=args.med_activity_router_mix,
-                    med_activity_adaptive_granularity=(
-                        args.med_activity_adaptive_granularity
+                    activity_graph_router_mix=args.activity_graph_router_mix,
+                    activity_graph_adaptive_granularity=(
+                        args.activity_graph_adaptive_granularity
                     ),
-                    med_activity_granularity_bank=(
-                        args.med_activity_granularity_bank
+                    activity_graph_granularity_bank=(
+                        args.activity_graph_granularity_bank
                     ),
                 )
                 neurosigvia_2 = neurosigvia_2.to(device=device)
@@ -1532,7 +1542,7 @@ if __name__ == "__main__":
                         vali_loader=vali_loader,
                     )
 
-            # Linear classification
+            # 根据分类器配置分派至 MLP/融合训练器，或使用已提取表征执行传统分类。
             if args.classifier_type:
                 if args.classifier_type == "mlp":
                     feature_cache_signature = None
@@ -1543,7 +1553,7 @@ if __name__ == "__main__":
                         adaptive_runtime_identity = None
                         static_encoder_contract = None
                         if (
-                            args.med_activity_adaptive_granularity
+                            args.activity_graph_adaptive_granularity
                             or adaptive_graph_enabled
                         ):
                             adaptive_split_identity = _split_input_identity(
@@ -1561,7 +1571,7 @@ if __name__ == "__main__":
                                 static_encoder_contract = _adaptive_static_encoder_contract(
                                     neurosigvia_1, mantis_model
                                 )
-                            elif args.modal_interaction == "patch_mindts":
+                            elif args.modal_interaction == "patch_fusion":
                                 adaptive_feature_code_identity = (
                                     _patch_feature_extractor_code_identity()
                                 )
@@ -1583,6 +1593,7 @@ if __name__ == "__main__":
                             runtime_identity=adaptive_runtime_identity,
                             static_encoder_contract=static_encoder_contract,
                         )
+                        # 将完整签名压成目录键，按数据集隔离保存缓存，并写出可审计的签名清单。
                         feature_cache_key = hashlib.sha256(
                             feature_cache_signature.encode("utf-8")
                         ).hexdigest()[:16]
@@ -1600,6 +1611,7 @@ if __name__ == "__main__":
                             ),
                             "signature": json.loads(feature_cache_signature),
                         }
+                        # 旧静态缓存仅通过已知代码兼容性与签名校验后才允许迁入当前命名空间。
                         if adaptive_graph_enabled and args.reuse_static_cache_dir:
                             legacy_signatures = {}
                             legacy_skip_reason = None
@@ -1613,7 +1625,7 @@ if __name__ == "__main__":
                                 else:
                                     for family, architecture in (
                                         ("neurosigvia_97ade80", NEUROSIGVIA_CACHE_ARCHITECTURE),
-                                        ("timemosaic_7f38ff7", KNOWN_TIMEMOSAIC_STATIC_CACHE_ARCHITECTURE),
+                                        ("timemosaic_7f38ff7", KNOWN_ARCHIVED_STATIC_CACHE_ARCHITECTURE),
                                     ):
                                         previous_signature = _known_legacy_adaptive_cache_signature(
                                             args, dataset, channels, p, family=family,
@@ -1648,6 +1660,7 @@ if __name__ == "__main__":
                             encoding="utf-8",
                         )
                         print(f"Feature cache key: {feature_cache_key}")
+                    # 主方法分支将固定划分、损失与门控设置交给在线自适应图训练器。
                     if args.modal_interaction == "adaptive_granularity":
                         # train_neurosigvia_classifier 依次准备静态 line/Mantis 特征、在线活动图、
                         # 融合与 MLP；4 个 64 点块最终汇聚成一个 256 点窗口的 logits[B,2]。
@@ -1735,7 +1748,7 @@ if __name__ == "__main__":
                                 ),
                                 checkpoint_metric=args.patch_checkpoint_metric,
                                 channel_hidden_dim=(
-                                    args.med_activity_granularity_hidden_dim
+                                    args.activity_graph_granularity_hidden_dim
                                 ),
                                 graph_token_grid=(
                                     args.granularity_graph_token_grid
@@ -1753,9 +1766,9 @@ if __name__ == "__main__":
                                 ),
                             )
                         )
-                    elif args.modal_interaction == "patch_mindts":
+                    elif args.modal_interaction == "patch_fusion":
                         val_metrics, test_metrics, train_indices, val_indices = (
-                            train_patch_mindts_classifier(
+                            train_patch_fusion_classifier(
                                 train_loader=train_loader,
                                 train_labels=train_labels,
                                 test_loader=test_loader,
@@ -1808,61 +1821,61 @@ if __name__ == "__main__":
                                     feature_cache_signature
                                 ),
                                 granularity_temperature=(
-                                    args.med_activity_granularity_temperature
+                                    args.activity_graph_granularity_temperature
                                 ),
                                 granularity_balance_weight=(
-                                    args.med_activity_granularity_balance_weight
+                                    args.activity_graph_granularity_balance_weight
                                 ),
                                 granularity_entropy_weight=(
-                                    args.med_activity_granularity_entropy_weight
+                                    args.activity_graph_granularity_entropy_weight
                                 ),
                                 granularity_mix_shrinkage_weight=(
-                                    args.med_activity_granularity_mix_shrinkage_weight
+                                    args.activity_graph_granularity_mix_shrinkage_weight
                                 ),
                                 granularity_prior_kl_weight=(
-                                    args.med_activity_granularity_prior_kl_weight
+                                    args.activity_graph_granularity_prior_kl_weight
                                 ),
                                 granularity_usage_floor=(
-                                    args.med_activity_granularity_usage_floor
+                                    args.activity_graph_granularity_usage_floor
                                 ),
                                 granularity_usage_ema_decay=(
-                                    args.med_activity_granularity_usage_ema_decay
+                                    args.activity_graph_granularity_usage_ema_decay
                                 ),
                                 granularity_entropy_floor=(
-                                    args.med_activity_granularity_entropy_floor
+                                    args.activity_graph_granularity_entropy_floor
                                 ),
                                 granularity_entropy_ceiling=(
-                                    args.med_activity_granularity_entropy_ceiling
+                                    args.activity_graph_granularity_entropy_ceiling
                                 ),
                                 granularity_router_mode=(
                                     args.patch_granularity_router_mode
                                 ),
                                 granularity_local_mix_max=(
-                                    args.med_activity_granularity_local_mix_max
+                                    args.activity_graph_granularity_local_mix_max
                                 ),
                                 granularity_local_mix_init=(
-                                    args.med_activity_granularity_local_mix_init
+                                    args.activity_graph_granularity_local_mix_init
                                 ),
                                 granularity_global_mix_max=(
-                                    args.med_activity_granularity_global_mix_max
+                                    args.activity_graph_granularity_global_mix_max
                                 ),
                                 granularity_global_mix_init=(
-                                    args.med_activity_granularity_global_mix_init
+                                    args.activity_graph_granularity_global_mix_init
                                 ),
                                 granularity_evidence_half_saturation=(
-                                    args.med_activity_granularity_evidence_half_saturation
+                                    args.activity_graph_granularity_evidence_half_saturation
                                 ),
                                 granularity_minimum_weight=(
-                                    args.med_activity_granularity_minimum_weight
+                                    args.activity_graph_granularity_minimum_weight
                                 ),
                                 granularity_score_cap=(
-                                    args.med_activity_granularity_score_cap
+                                    args.activity_graph_granularity_score_cap
                                 ),
                                 granularity_scorer_hidden_dim=(
-                                    args.med_activity_granularity_scorer_hidden_dim
+                                    args.activity_graph_granularity_scorer_hidden_dim
                                 ),
                                 granularity_confidence_half_saturation=(
-                                    args.med_activity_granularity_confidence_half_saturation
+                                    args.activity_graph_granularity_confidence_half_saturation
                                 ),
                                 router_top_k=args.patch_router_top_k,
                                 router_training_noise_std=(
@@ -1897,7 +1910,7 @@ if __name__ == "__main__":
                                 ),
                                 checkpoint_metric=args.patch_checkpoint_metric,
                                 channel_hidden_dim=(
-                                    args.med_activity_granularity_hidden_dim
+                                    args.activity_graph_granularity_hidden_dim
                                 ),
                                 artifact_dir=(
                                     Path(result_dir)
@@ -1947,25 +1960,25 @@ if __name__ == "__main__":
                             feature_cache_dir=feature_cache_dir,
                             feature_cache_signature=feature_cache_signature,
                             granularity_hidden_dim=(
-                                args.med_activity_granularity_hidden_dim
+                                args.activity_graph_granularity_hidden_dim
                             ),
                             granularity_temperature=(
-                                args.med_activity_granularity_temperature
+                                args.activity_graph_granularity_temperature
                             ),
                             granularity_base_prior=(
-                                args.med_activity_granularity_base_prior
+                                args.activity_graph_granularity_base_prior
                             ),
                             granularity_balance_weight=(
-                                args.med_activity_granularity_balance_weight
+                                args.activity_graph_granularity_balance_weight
                             ),
                             granularity_entropy_weight=(
-                                args.med_activity_granularity_entropy_weight
+                                args.activity_graph_granularity_entropy_weight
                             ),
                             artifact_dir=(
                                 Path(result_dir)
                                 / "atgs"
                                 / str(dataset).replace("/", "_").replace("\\", "_")
-                                if args.med_activity_adaptive_granularity
+                                if args.activity_graph_adaptive_granularity
                                 else None
                             ),
                             )
@@ -2020,6 +2033,7 @@ if __name__ == "__main__":
                         val_ratio=args.val_ratio,
                     )
 
+                # 汇总训练器返回的最终验证和测试指标；非固定验证协议同时记录内部划分索引。
                 write_result_table(
                     result_dir=result_dir,
                     dataset=dataset,

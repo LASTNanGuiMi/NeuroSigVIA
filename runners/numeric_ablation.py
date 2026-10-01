@@ -6,17 +6,15 @@ import json
 import os
 from pathlib import Path
 import time
-
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-
 from src.classifier import compute_metrics_from_predictions
 from src.numeric_ablation import ARCHITECTURE, NumericOnlyClassifier
 from src.numeric_ablation_reference import load_reference
-from src.patch_mindts import (
+from src.patch_fusion import (
     _EarlyStoppingMonitor, _aggregate_subject_predictions, _balanced_class_weights,
     _build_patch_lr_scheduler, _checkpoint_selection_key, _merge_subject_metrics,
 )
@@ -67,14 +65,12 @@ def evaluate(model, loader, classes, subjects, device):
     details.update(subject_details)
     return _merge_subject_metrics(window, subject), details
 
-
 def state_digest(model):
     digest = hashlib.sha256()
     for key, value in model.state_dict().items():
         digest.update(key.encode())
         digest.update(value.detach().cpu().contiguous().numpy().tobytes())
     return digest.hexdigest()
-
 
 def positive_int(value):
     try:
@@ -100,7 +96,9 @@ def training_configuration(reference_args, checkpoint_metric, batch_size=None):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reference-run", required=True, type=Path)
+    parser.add_argument("--reference-run", type=Path, help="Legacy paired-run mode only")
+    from src.numeric_standalone import add_arguments
+    add_arguments(parser)
     parser.add_argument("--dataset", choices=["shimmer10", "pads11", "apava", "tdbrain"], required=True)
     parser.add_argument("--seed", type=int, choices=[42, 43, 44], required=True)
     parser.add_argument("--output", required=True, type=Path)
@@ -147,7 +145,11 @@ def main():
         raise FileExistsError(f"refusing to overwrite {args.output}")
     args.output.mkdir(parents=True)
     started = time.monotonic()
-    reference = load_reference(args.reference_run, args.seed, args.dataset)
+    if args.reference_run is None:
+        from src.numeric_standalone import load_inputs
+        reference = load_inputs(args)
+    else:
+        reference = load_reference(args.reference_run, args.seed, args.dataset)
     reference_cfg = reference["args"]
     cfg, batch_protocol = training_configuration(reference_cfg, args.checkpoint_metric, args.batch_size)
     splits, classes = reference["splits"], np.asarray(reference["classes"])
@@ -170,12 +172,12 @@ def main():
         min_epochs=cfg["mlp_early_stop_min_epochs"], warmup_epochs=cfg["mlp_early_stop_warmup_epochs"],
         ema_decay=cfg["mlp_early_stop_ema_decay"], min_delta=cfg["mlp_early_stop_min_delta"],
     )
-    source_hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path(__file__), Path("src/numeric_ablation.py"), Path("src/numeric_ablation_reference.py"), Path("src/adaptive_graph_training.py"), Path("src/multimodal_fusion.py"), Path("src/mlp_classifier.py"), Path("src/patch_mindts.py")]}
+    source_hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path(__file__), Path("src/numeric_ablation.py"), Path("src/numeric_ablation_reference.py"), Path("src/adaptive_graph_training.py"), Path("src/multimodal_fusion.py"), Path("src/mlp_classifier.py"), Path("src/patch_fusion.py")]}
     protocol = dict(
         architecture=ARCHITECTURE, dataset=args.dataset, training_seed=args.seed, split_seed=42,
         reference=reference["provenance"], model_config=reference["model_config"],
         training_args=cfg,
-        reference_checkpoint_metric=reference_cfg.get("patch_checkpoint_metric"),
+        reference_checkpoint_metric=(reference_cfg.get("patch_checkpoint_metric") if args.reference_run else None),
         initial_state_sha256=initial_sha256,
         initial_channel_pool_sha256=state_digest(model.channel_pool),
         classifier_input_dim=model.classifier_input_dim,
@@ -190,6 +192,10 @@ def main():
         **batch_protocol,
         std_ddof=1, smoke=args.smoke,
     )
+    if args.reference_run is None:
+        protocol["initialization"] = "Fresh numeric channel pool and MLP from explicit parameters; no main model constructed or trained main weights used."
+        protocol["randomness_note"] = "Independent seeded initialization; no historical main-run RNG pairing."
+        protocol["configuration_source"] = "explicit_cli"
     write_json(args.output / "protocol.json", protocol)
     best_key, best_epoch, best_state = None, None, None
     history = []

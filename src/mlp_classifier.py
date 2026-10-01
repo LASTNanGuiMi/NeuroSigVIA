@@ -476,9 +476,9 @@ def _balanced_class_weights(label_indices, num_classes, device):
 def _forward_neurosigvia_batch(model, batch, channels, device):
     granularity_count = int(getattr(model, "feature_granularity_count", 1))
     if granularity_count > 1:
-        if model.image_mode != "med_activity_graph":
+        if model.image_mode != "multiscale_activity_graph":
             raise ValueError(
-                "Adaptive vision features require med_activity_graph mode."
+                "Adaptive vision features require multiscale_activity_graph mode."
             )
         outputs = model.forward_granularities(batch.to(device))
         if outputs.ndim != 3 or outputs.shape[1] != granularity_count:
@@ -492,7 +492,7 @@ def _forward_neurosigvia_batch(model, batch, channels, device):
     if model.image_mode in {
         "multichannel_line_plot",
         "activity_graph",
-        "med_activity_graph",
+        "multiscale_activity_graph",
         "activity_matrix",
     }:
         outputs = model(batch.to(device))

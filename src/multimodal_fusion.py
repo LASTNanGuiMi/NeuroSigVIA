@@ -28,7 +28,7 @@ from src.temporal_granularity import (
     AdaptiveGranularityGate,
 )
 from src.mlp_classifier import FusionModule
-from src.patch_mindts import (
+from src.patch_fusion import (
     ChannelAttentionPool,
     MaskedIntraSampleInfoNCE,
     _MLPHead,

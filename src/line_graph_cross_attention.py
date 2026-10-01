@@ -184,6 +184,7 @@ class LineGraphCrossAttention(nn.Module):
             raise ValueError(
                 f"expected graph_dim={self.graph_dim}, got {graph_dim}"
             )
+        # 至少保留两个图像空间 token，否则单个 K/V 的 softmax 恒为 1，无法体现查询差异。
         if graph_token_count < 2:
             raise ValueError(
                 "graph_spatial_tokens must contain at least two K/V tokens; "
@@ -245,6 +246,7 @@ class LineGraphCrossAttention(nn.Module):
         batch_size, num_patches, _ = line_tokens.shape
         graph_token_count = graph_spatial_tokens.shape[2]
 
+        # 在投影前清零无效窗口，使填充值或 NaN 不进入注意力计算。
         line_valid = valid_mask.unsqueeze(-1)
         graph_valid = valid_mask.unsqueeze(-1).unsqueeze(-1)
         safe_line_tokens = torch.where(
@@ -258,12 +260,14 @@ class LineGraphCrossAttention(nn.Module):
             torch.zeros_like(graph_spatial_tokens),
         )
 
+        # 合并 B、N 为批次，各时间窗口独立融合；折线图提供一个查询 token。
         # line [B,N,D_line] 经投影后得到 query [B*N,1,F]，F=self.fusion_dim。
         query = self.query_projection(safe_line_tokens).reshape(
             batch_size * num_patches,
             1,
             self.fusion_dim,
         )
+        # Activity Graph 的 P 个空间 token 提供 K/V，形状为 [B*N,P,D_graph]。
         flat_graph = safe_graph_tokens.reshape(
             batch_size * num_patches,
             graph_token_count,
@@ -282,6 +286,7 @@ class LineGraphCrossAttention(nn.Module):
             average_attn_weights=False,
         )
 
+        # 注意力残差以投影后的折线图查询为基准，再接带残差的前馈网络。
         hidden = self.attention_norm(
             query + self.attention_dropout(attended)
         )
@@ -292,6 +297,7 @@ class LineGraphCrossAttention(nn.Module):
             num_patches,
             self.fusion_dim,
         )
+        # 线性层偏置可能让无效窗口再次变成非零，因此在输出边界重新应用掩码。
         output = torch.where(
             line_valid,
             output,
@@ -303,6 +309,7 @@ class LineGraphCrossAttention(nn.Module):
 
         if attention_weights is None:
             raise RuntimeError("attention weights were requested but not returned")
+        # 可选诊断保留各头权重 [B,N,num_heads,1,P]，不在头之间求平均。
         attention_weights = attention_weights.reshape(
             batch_size,
             num_patches,

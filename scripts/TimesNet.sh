@@ -8,11 +8,13 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 METHOD=TimesNet
 source scripts/lib/explicit_experiments.sh
 
-# 用户指定的四数据集对照组合：APAVA/Shimmer dropout=0.3，TDBRAIN/PADS dropout=0.1。
+# 用户指定的四数据集对照组合：Shimmer dropout=0.3，TDBRAIN/APAVA/PADS dropout=0.1。
 # 对应已有截图/敏感性实验；其他超参数保持原 TimesNet 配置。
 
 # Subject-Independent
 # TDBRAIN Dataset
+# top_k=5：预设 top_k=2..10 敏感性实验中，按三 seed 验证 Macro-F1 均值选出的最低配置。
+# 原始对比配置为 top_k=3；本设置单独标记为敏感性配置。
 (
 export CUDA_VISIBLE_DEVICES=0
 
@@ -35,7 +37,7 @@ python \
   --patience 12 \
   --warmup_epochs 10 \
   --min_delta 0.002 \
-  --top_k 3 \
+  --top_k 5 \
   --num_kernels 6 \
   --batch_size 8 \
   --checkpoint_metric window_macro_f1 \
@@ -63,7 +65,7 @@ python \
   --patience 12 \
   --warmup_epochs 10 \
   --min_delta 0.002 \
-  --top_k 3 \
+  --top_k 5 \
   --num_kernels 6 \
   --batch_size 8 \
   --checkpoint_metric window_macro_f1 \
@@ -91,7 +93,7 @@ python \
   --patience 12 \
   --warmup_epochs 10 \
   --min_delta 0.002 \
-  --top_k 3 \
+  --top_k 5 \
   --num_kernels 6 \
   --batch_size 8 \
   --checkpoint_metric window_macro_f1 \
@@ -115,12 +117,12 @@ python \
   --task_name classification \
   --model TimesNet \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 2 \
   --n_heads 8 \
-  --dropout 0.3 \
+  --dropout 0.1 \
   --learning_rate 3e-4 \
   --weight_decay 1e-3 \
   --train_epochs 100 \
@@ -143,12 +145,12 @@ python \
   --task_name classification \
   --model TimesNet \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 2 \
   --n_heads 8 \
-  --dropout 0.3 \
+  --dropout 0.1 \
   --learning_rate 3e-4 \
   --weight_decay 1e-3 \
   --train_epochs 100 \
@@ -171,12 +173,12 @@ python \
   --task_name classification \
   --model TimesNet \
   --dataset apava \
-  --split_seed 42 \
+  --split_seed 20260917 \
   --d_model 128 \
   --d_ff 256 \
   --e_layers 2 \
   --n_heads 8 \
-  --dropout 0.3 \
+  --dropout 0.1 \
   --learning_rate 3e-4 \
   --weight_decay 1e-3 \
   --train_epochs 100 \

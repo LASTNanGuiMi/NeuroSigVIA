@@ -11,7 +11,16 @@ _PREVIOUS_OPTIONS = {
     "--timemosaic_gate_checkpoint": "--granularity_gate_checkpoint",
     "--timemosaic_freeze_gate": "--granularity_freeze_gate",
 }
-_PREVIOUS_INTERACTION = "patch_timemosaic_graph"
+# src/patch_fusion.py was src/patch_mindts.py; cache manifests and checkpoints
+# written before the rename record the earlier path.
+_PREVIOUS_OPTION_PREFIXES = {"--med_activity_": "--activity_graph_"}
+_PREVIOUS_VALUES = {
+    "--modal_interaction": {
+        "patch_timemosaic_graph": "adaptive_granularity",
+        "patch_mindts": "patch_fusion",
+    },
+    "--image_mode": {"med_activity_graph": "multiscale_activity_graph"},
+}
 _PREVIOUS_ARCHITECTURE = "timemosaic_adaptive_graph_crossattn_concatattn_v2"
 _CURRENT_ARCHITECTURE = "neurosigvia_adaptive_graph_crossattn_concatattn_v2"
 _PREVIOUS_ENCODER_WRAPPERS = {
@@ -20,23 +29,29 @@ _PREVIOUS_ENCODER_WRAPPERS = {
 }
 
 
+def _current_option(option):
+    option = _PREVIOUS_OPTIONS.get(option, option)
+    for previous, current in _PREVIOUS_OPTION_PREFIXES.items():
+        if option.startswith(previous):
+            return current + option[len(previous):]
+    return option
+
+
 def normalize_cli_arguments(arguments):
-    """Normalize only option names and the selected interaction, never paths."""
+    """Normalize only option names and renamed option values, never paths."""
     result = []
-    interaction_value = False
+    pending_values = None
     for token in arguments:
         option, separator, value = token.partition("=")
-        option = _PREVIOUS_OPTIONS.get(option, option)
-        if interaction_value and token == _PREVIOUS_INTERACTION:
-            token = "adaptive_granularity"
-        elif option == "--modal_interaction" and separator:
-            token = option + separator + (
-                "adaptive_granularity" if value == _PREVIOUS_INTERACTION else value
-            )
+        option = _current_option(option)
+        if pending_values is not None and token in pending_values:
+            token = pending_values[token]
+        elif separator and option in _PREVIOUS_VALUES:
+            token = option + separator + _PREVIOUS_VALUES[option].get(value, value)
         else:
             token = option + separator + value
         result.append(token)
-        interaction_value = option == "--modal_interaction" and not separator
+        pending_values = None if separator else _PREVIOUS_VALUES.get(option)
     return result
 
 
@@ -44,6 +59,14 @@ def matches_checkpoint_architecture(recorded, expected):
     """Accept the previous name only for the same current model architecture."""
     return recorded == expected or (
         expected == _CURRENT_ARCHITECTURE and recorded == _PREVIOUS_ARCHITECTURE
+    )
+
+
+def is_previous_image_mode(recorded, current):
+    """Recognize only the explicitly renamed image mode."""
+    return (
+        isinstance(recorded, str)
+        and _PREVIOUS_VALUES["--image_mode"].get(recorded) == current
     )
 
 

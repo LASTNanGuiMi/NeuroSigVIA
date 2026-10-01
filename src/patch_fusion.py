@@ -30,13 +30,13 @@ from src.utils import get_split, resize_mantis_input, set_random_seed
 
 
 PATCH_FEATURE_CACHE_SCHEMA_VERSION = 1
-PATCH_FEATURE_ARCHITECTURE = "patch_mindts_v1"
-PATCH_MINDTS_ARCHITECTURE = "patch_mindts_v4"
+PATCH_FEATURE_ARCHITECTURE = "patch_fusion_v1"
+PATCH_FUSION_ARCHITECTURE = "patch_fusion_v4"
 PATCH_TAIL_POLICY = "right_zero_pad_then_crop_valid_prefix_v1"
 PATCH_POOLING_POLICY = "valid_fraction_weighted_mean_v1"
-
 # TDBRAIN 的 adaptive_granularity 主路径复用本文件的切片、静态编码、池化和评估 helpers。
 # 它调用 adaptive_graph_training.py 的训练器；不能据本文件名误认其使用旧版图候选缓存训练器。
+
 PATCH_FEATURE_KEYS = (
     "line_tokens",
     "graph_tokens",
@@ -119,8 +119,8 @@ def make_temporal_patches(
         patch_count = 1
     else:
         patch_count = 1 + math.ceil((time_steps - window_size) / stride)
-
     # N=max(1,1+ceil((T-L)/S))；默认 T=256、L=S=64 得到 N=4，无重叠且无尾部补零。
+
     required_time = (patch_count - 1) * stride + window_size
     if required_time > time_steps:
         padded = F.pad(tensor, (0, required_time - time_steps), value=0)
@@ -129,8 +129,8 @@ def make_temporal_patches(
 
     patches = padded.unfold(-1, window_size, stride)[..., :patch_count, :]
     patches = patches.permute(0, 2, 1, 3).contiguous()
-
     # unfold 得 [B,C,N,L]，调轴得到所有模态共用的 [B,N,C,L]，TDBRAIN 为 [B,4,33,64]。
+
     starts = torch.arange(
         patch_count,
         dtype=torch.long,
@@ -146,8 +146,8 @@ def make_temporal_patches(
     valid_lengths = time_mask.sum(dim=-1)
     patch_mask = valid_lengths > 0
     valid_fraction = valid_lengths.to(dtype=torch.float32) / float(window_size)
-
     # time_mask=[B,N,L]；lengths/mask/fraction 均为 [B,N]；完整块 fraction=1，空块 mask=False。
+
     patches = patches.masked_fill(~time_mask[:, :, None, :], 0)
     return TemporalPatchBatch(
         patches=patches,
@@ -206,8 +206,8 @@ class ChannelAttentionPool(nn.Module):
         scores = self.scorer(score_inputs).squeeze(-1)
         weights = torch.softmax(scores.float(), dim=-1).to(dtype=values.dtype)
         pooled = torch.sum(weights.unsqueeze(-1) * values, dim=2)
-
         # softmax 沿 C 轴，weights=[B,N,C]，通道加权和 pooled=[B,N,F]，不是通道拼接。
+
         if patch_mask is not None:
             if patch_mask.shape != tokens.shape[:2]:
                 raise ValueError(
@@ -1512,8 +1512,8 @@ class MaskedIntraSampleInfoNCE(nn.Module):
                     + torch.sum(column_losses * anchor_weights) / denominator
                 )
             losses.append(sample_loss / math.log(int(valid_indices.numel())))
-
             # 两方向交叉熵按有效时长加权，再除 log(Nv)；最后对符合条件的输入窗口取均值。
+
         if not losses:
             return zero_loss
         return torch.stack(losses).mean()
@@ -1568,7 +1568,7 @@ def valid_fraction_weighted_pool(
     ) / denominators
 
 
-class PatchMindTSFusionModule(nn.Module):
+class PatchFusionModule(nn.Module):
     """Patch-internal fusion followed by valid-fraction weighted pooling."""
 
     def __init__(
@@ -2189,10 +2189,10 @@ def _extract_graph_tokens(
     device,
     encode_batch_size,
 ):
-    graph_bank = getattr(vision_model, "med_activity_granularity_bank", None)
+    graph_bank = getattr(vision_model, "activity_graph_granularity_bank", None)
     if graph_bank is None or not hasattr(graph_bank, "graphs"):
         raise ValueError(
-            "patch_mindts requires a vision model with an adaptive Activity Graph bank"
+            "patch_fusion requires a vision model with an adaptive Activity Graph bank"
         )
     candidate_batches = []
     for graph_renderer in graph_bank.graphs:
@@ -2286,7 +2286,7 @@ def extract_patch_feature_batch(
     if encode_batch_size <= 0:
         raise ValueError("encode_batch_size must be positive")
     if vision_model is None or mantis_model is None:
-        raise ValueError("patch_mindts requires both a vision model and Mantis")
+        raise ValueError("patch_fusion requires both a vision model and Mantis")
 
     vision_model.requires_grad_(False)
     mantis_model.requires_grad_(False)
@@ -3670,7 +3670,7 @@ def _save_patch_diagnostics(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     arrays = {
         "schema_version": np.asarray(5, dtype=np.int64),
-        "architecture": np.asarray(PATCH_MINDTS_ARCHITECTURE),
+        "architecture": np.asarray(PATCH_FUSION_ARCHITECTURE),
         "granularity_labels": np.asarray(granularity_labels),
         **details,
     }
@@ -4109,7 +4109,7 @@ def _save_patch_checkpoint(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = {
         "schema_version": 5,
-        "architecture": PATCH_MINDTS_ARCHITECTURE,
+        "architecture": PATCH_FUSION_ARCHITECTURE,
         "tail_policy": PATCH_TAIL_POLICY,
         "pooling_policy": PATCH_POOLING_POLICY,
         "outer_patch_size": int(outer_patch_size),
@@ -4217,7 +4217,7 @@ def _save_patch_checkpoint(
         },
         "training_history": training_history,
     }
-    path = artifact_dir / "patch_mindts_checkpoint.pt"
+    path = artifact_dir / "patch_fusion_checkpoint.pt"
     temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         torch.save(checkpoint, temporary_path)
@@ -4226,7 +4226,7 @@ def _save_patch_checkpoint(
         temporary_path.unlink(missing_ok=True)
 
 
-def train_patch_mindts_classifier(
+def train_patch_fusion_classifier(
     train_loader,
     train_labels,
     test_loader,
@@ -4385,18 +4385,18 @@ def train_patch_mindts_classifier(
             "granularity_confidence_half_saturation must be positive and finite"
         )
     if vision_model is None or mantis_model is None:
-        raise ValueError("patch_mindts requires vision_model and mantis_model")
-    graph_bank = getattr(vision_model, "med_activity_granularity_bank", None)
+        raise ValueError("patch_fusion requires vision_model and mantis_model")
+    graph_bank = getattr(vision_model, "activity_graph_granularity_bank", None)
     if graph_bank is None or not hasattr(graph_bank, "patch_length_bank"):
         raise ValueError("vision_model does not expose an adaptive granularity bank")
     granularity_bank = tuple(tuple(regime) for regime in graph_bank.patch_length_bank)
     num_granularities = len(granularity_bank)
     if num_granularities != 3:
-        raise ValueError("patch_mindts requires exactly three graph experts")
+        raise ValueError("patch_fusion requires exactly three graph experts")
     regime_widths = {len(regime) for regime in granularity_bank}
     if len(regime_widths) != 1 or not regime_widths.issubset({1, 3}):
         raise ValueError(
-            "patch_mindts graph experts must be either three single-scale "
+            "patch_fusion graph experts must be either three single-scale "
             "neutral-RGB regimes or three legacy three-scale RGB regimes"
         )
     for regime in granularity_bank:
@@ -4405,7 +4405,7 @@ def train_patch_mindts_classifier(
         ):
             raise ValueError("scales inside each graph expert must be strictly increasing")
     if len(set(granularity_bank)) != num_granularities:
-        raise ValueError("patch_mindts graph experts must be distinct")
+        raise ValueError("patch_fusion graph experts must be distinct")
     internal_scales = tuple(
         sorted({int(scale) for regime in granularity_bank for scale in regime})
     )
@@ -4546,7 +4546,7 @@ def train_patch_mindts_classifier(
         train_features,
         train_indices,
     )
-    model = PatchMindTSFusionModule(
+    model = PatchFusionModule(
         visual_dim=visual_dim,
         temporal_dim=temporal_dim,
         num_channels=channels,
@@ -4828,15 +4828,15 @@ def train_patch_mindts_classifier(
             Path(artifact_dir) / "patch_atgs_summary.json",
             {
                 "schema_version": 5,
-                "architecture": PATCH_MINDTS_ARCHITECTURE,
+                "architecture": PATCH_FUSION_ARCHITECTURE,
                 "splits": summaries,
             },
         )
         _atomic_json_dump(
-            Path(artifact_dir) / "patch_mindts_training_history.json",
+            Path(artifact_dir) / "patch_fusion_training_history.json",
             {
                 "schema_version": 5,
-                "architecture": PATCH_MINDTS_ARCHITECTURE,
+                "architecture": PATCH_FUSION_ARCHITECTURE,
                 "selected_epoch": best_epoch,
                 "validation_macro_f1": float(val_metrics["macro_f1"]),
                 "validation_subject_macro_f1": (
@@ -4901,7 +4901,7 @@ def train_patch_mindts_classifier(
 __all__ = [
     "PATCH_FEATURE_CACHE_SCHEMA_VERSION",
     "PATCH_FEATURE_ARCHITECTURE",
-    "PATCH_MINDTS_ARCHITECTURE",
+    "PATCH_FUSION_ARCHITECTURE",
     "PATCH_TAIL_POLICY",
     "PATCH_POOLING_POLICY",
     "TemporalPatchBatch",
@@ -4913,9 +4913,9 @@ __all__ = [
     "MaskedIntraSampleInfoNCE",
     "compute_line_query_center",
     "valid_fraction_weighted_pool",
-    "PatchMindTSFusionModule",
+    "PatchFusionModule",
     "extract_patch_feature_batch",
     "save_patch_feature_cache",
     "load_patch_feature_cache",
-    "train_patch_mindts_classifier",
+    "train_patch_fusion_classifier",
 ]

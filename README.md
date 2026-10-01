@@ -46,7 +46,7 @@ NeuroSigVIA/
 |   |-- line_graph_cross_attention.py
 |   |-- multimodal_fusion.py
 |   |-- adaptive_graph_training.py
-|   |-- patch_mindts.py
+|   |-- patch_fusion.py
 |   |-- mlp_classifier.py
 |   |-- classifier.py
 |   |-- embedding.py
@@ -248,14 +248,18 @@ mean window probabilities per subject provide supplementary subject metrics.
 The sourced `scripts/lib/explicit_experiments.sh` handles run directories,
 GPU locks, logs and process management; model parameters stay in each command.
 
-The TimesNet script records the user-requested retrospective combination of
-the screenshot and subsequent sensitivity runs: dropout 0.3 for APAVA/Shimmer10
-and 0.1 for TDBRAIN/PADS11. This combination was chosen by comparing reported
-test Macro-F1, not by a shared validation-tuning procedure. Its remaining
-configuration is unchanged: split seed 42, `d_model=128`, `d_ff=256`, two layers, AdamW learning rate
-`3e-4`, weight decay `1e-3`, at most 100 epochs, and early stopping with warmup
-10, patience 12 and `min_delta=0.002`. It uses `top_k=3` and `num_kernels=6`;
-`n_heads=8` is accepted but unused by its convolution architecture. See
+The TimesNet script uses per-dataset settings taken from retrospective
+sensitivity runs: dropout is 0.3 for Shimmer10 and 0.1 for TDBRAIN, APAVA and
+PADS11; `top_k` is 5 for TDBRAIN and 3 for the other three datasets. These
+values were not obtained by one shared validation-tuning procedure: the
+Shimmer10 dropout was chosen by comparing reported test Macro-F1, and the
+TDBRAIN `top_k=5` is the setting with the lowest three-seed mean validation
+Macro-F1 in a `top_k=2..10` sweep, whereas the original comparison setting was
+`top_k=3`. The remaining configuration is shared: `d_model=128`, `d_ff=256`,
+two layers, AdamW learning rate `3e-4`, weight decay `1e-3`, at most 100
+epochs, early stopping with warmup 10, patience 12 and `min_delta=0.002`, and
+`num_kernels=6`; `n_heads=8` is accepted but unused by its convolution
+architecture. See
 [TimesNet integration](third_party/timesnet/INTEGRATION.md) for verification and
 interpreter examples.
 
@@ -304,7 +308,7 @@ free, with status `WAITING_FOR_GPU`.
 
 Every launch creates a unique `RUN_TAG`. Results are `results/<RUN_TAG>/seed<SEED>/<DATASET>/`; the current model's training artifacts are under its `adaptive_graph/` subdirectory. Logs and job-status files are in `logs/<RUN_TAG>/` and `status/<RUN_TAG>/`. Existing run tags are rejected. To rerun failed jobs, retain only their explicit commands in the method script and launch again with a fresh run tag; existing checkpoints/results remain intact. Baselines do not use a feature cache.
 
-The five datasets keep their current fixed subject assignments (`split_seed=42`), normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself keeps batch sizes 8/8/8/1/4 and its existing early stopping; the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter uses AdamW, balanced cross entropy, ReduceLROnPlateau, explicitly selected validation window Macro-F1, supplementary mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
+APAVA uses the 0917 subject-stratified resplit (`split_seed=20260917`) and the other four datasets keep their fixed subject assignments (`split_seed=42`); all keep their normalization, labels and full sequence lengths. Training seeds affect initialization and stochastic training. NeuroSigVIA itself uses batch sizes 8/8/8/1/16 and its existing early stopping. It selects checkpoints by validation window Macro-F1, except on Shimmer10, where `--patch_checkpoint_metric subject_macro_f1` is used: every Shimmer10 subject contributes one recording, so the two scores coincide and only the tie-break differs (lowest validation subject log-loss, then earliest epoch); the six Medformer-family launchers use 128/32/32/1/4 and patience 10, while TimesNet keeps 8/8/1/4 on its four datasets. The study adapter uses AdamW, balanced cross entropy, ReduceLROnPlateau, explicitly selected validation window Macro-F1, supplementary mean subject probabilities and one final test evaluation after restoring the best checkpoint. Medformer selection uses its averaged model when `--swa` is enabled. A smoke check is explicitly marked non-scientific and does not evaluate the test set.
 
 The six Medformer-family scripts transfer the upstream classification-shell
 settings into NeuroSigVIA's fixed data and evaluation protocol; this is not a
@@ -314,19 +318,18 @@ in the corresponding method script so the same `bash scripts/<Method>.sh`
 command reproduces its saved configuration. Every command spells out its
 dataset, seed and output path beneath the shared run-tag directory.
 
-`scripts/NeuroSigVIA_NumericOnly.sh` lists 12 paired commands for
-TDBRAIN/APAVA/Shimmer10/PADS11 and seeds 42/43/44. Set `REFERENCE_RUN` to a
-completed main-method run with its `status/<RUN_TAG>/manifest.tsv`, the paired
-dataset/seed results and compatible feature caches; the script's default is a
-historical server run.
-The NumericOnly runner inherits model dimensions, training settings and cached
-Mantis inputs from each paired reference, initializes a fresh numeric-only
-model, and explicitly selects checkpoints by `window_macro_f1`. Its default
-GPU exports are Shimmer10=2, PADS11=3, APAVA=4 and TDBRAIN=5; edit each block
-to use available GPUs before launching:
+`scripts/NeuroSigVIA_NumericOnly.sh` lists 12 standalone commands for
+TDBRAIN/APAVA/Shimmer10/PADS11 and seeds 42/43/44. Every command states its
+model dimensions and training settings explicitly, encodes the raw windows
+with frozen Mantis itself, initializes a fresh numeric-only model, and selects
+checkpoints by `window_macro_f1`; no completed main-method run is needed.
+`runners.numeric_ablation --reference-run` remains available as a legacy
+paired mode that inherits settings and cached Mantis inputs from a completed
+main-method run. The default GPU exports are Shimmer10=2, PADS11=3, APAVA=4
+and TDBRAIN=5; edit each block to use available GPUs before launching:
 
 ```bash
-REFERENCE_RUN=results/your_completed_main_run bash scripts/NeuroSigVIA_NumericOnly.sh
+bash scripts/NeuroSigVIA_NumericOnly.sh
 ```
 
 The method-defining values remain fixed: outer window/stride 64/64, adaptive
@@ -335,7 +338,7 @@ Mantis patch alignment, and final visual-Mantis `concat_attn` fusion.
 
 This path is selected only by
 `--modal_interaction adaptive_granularity`. Do not add
-`--med_activity_adaptive_granularity`: that flag activates the historical
+`--activity_graph_adaptive_granularity`: that flag activates the historical
 post-encoding graph bank and is rejected for the current path.
 
 The script sets `--granularity_gate_temperature`,
@@ -373,7 +376,7 @@ The official TimesNet model and its required layers are under `third_party/times
 | `third_party/timesnet/` | Pinned official TimesNet model, required layers, MIT license and integration notes |
 | `src/activity_graph.py` | Algorithm 1 signal ordering and Algorithm 3 cyclic three-column waveform rendering |
 | `src/granularity_selector.py` | Feature-level selector used by shared fusion paths |
-| `src/patch_mindts.py`, `src/mlp_classifier.py` | Shared window, encoder and fusion utilities, plus retained Patch-MindTS / Router paths |
+| `src/patch_fusion.py`, `src/mlp_classifier.py` | Shared window, encoder and fusion utilities, plus the retained post-encoding selector and Router paths |
 
 The former selector-comparison and archived-checkpoint reproduction entries
 have been removed from the current checkout. Their committed versions remain

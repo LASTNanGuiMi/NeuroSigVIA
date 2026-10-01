@@ -19,7 +19,7 @@ VIT_NAME = [
 ]
 
 
-def parse_med_activity_patch_lengths(value):
+def parse_activity_graph_patch_lengths(value):
     try:
         patch_lengths = tuple(int(item.strip()) for item in value.split(","))
     except ValueError as exc:
@@ -40,7 +40,7 @@ def parse_med_activity_patch_lengths(value):
     return patch_lengths
 
 
-def parse_med_activity_granularity_bank(value):
+def parse_activity_graph_granularity_bank(value):
     regimes = []
     for raw_regime in value.split(";"):
         raw_regime = raw_regime.strip()
@@ -144,7 +144,7 @@ def parse_args():
             "line_plot",
             "multichannel_line_plot",
             "activity_graph",
-            "med_activity_graph",
+            "multiscale_activity_graph",
             "activity_matrix",
             "segment",
         ],
@@ -153,8 +153,8 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--med_activity_patch_lengths",
-        type=parse_med_activity_patch_lengths,
+        "--activity_graph_patch_lengths",
+        type=parse_activity_graph_patch_lengths,
         default=(1,),
         help=(
             "One fixed smoothing block length for paper waveform graphs; 1 uses raw signals"
@@ -162,28 +162,28 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--med_activity_channel_mix",
+        "--activity_graph_channel_mix",
         type=float,
         default=0.35,
         help="Deprecated compatibility option; paper Activity Graph does not propagate channel values",
     )
 
     parser.add_argument(
-        "--med_activity_router_temperature",
+        "--activity_graph_router_temperature",
         type=float,
         default=0.2,
         help="Deprecated compatibility option; unused by the paper waveform renderer",
     )
 
     parser.add_argument(
-        "--med_activity_router_mix",
+        "--activity_graph_router_mix",
         type=float,
         default=0.5,
         help="Deprecated compatibility option; unused by the paper waveform renderer",
     )
 
     parser.add_argument(
-        "--med_activity_adaptive_granularity",
+        "--activity_graph_adaptive_granularity",
         action="store_true",
         help=(
             "Extract a bank of full RGB med-activity graphs and learn a "
@@ -192,8 +192,8 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--med_activity_granularity_bank",
-        type=parse_med_activity_granularity_bank,
+        "--activity_graph_granularity_bank",
+        type=parse_activity_graph_granularity_bank,
         default=None,
         help=(
             "Semicolon-separated fixed waveform smoothing scales, e.g. 4;8;16."
@@ -201,22 +201,22 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--med_activity_granularity_hidden_dim",
+        "--activity_graph_granularity_hidden_dim",
         type=int,
         default=64,
         help=(
-            "Hidden width of the Mantis channel-attention pool in patch_mindts; "
+            "Hidden width of the Mantis channel-attention pool in patch_fusion; "
             "also retained for the legacy sample-level selector"
         ),
     )
 
     parser.add_argument(
-        "--med_activity_granularity_temperature",
+        "--activity_graph_granularity_temperature",
         type=float,
         default=None,
         help=(
             "Softmax temperature of the granularity selector. Defaults to "
-            "1.0 for bounded-RBF patch_mindts v4 and the legacy sample-level "
+            "1.0 for bounded-RBF patch_fusion v4 and the legacy sample-level "
             "ATGS path"
         ),
     )
@@ -244,127 +244,127 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--med_activity_granularity_base_prior",
+        "--activity_graph_granularity_base_prior",
         type=float,
         default=0.9,
         help="Initial selector probability assigned to the legacy patch regime",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_balance_weight",
+        "--activity_graph_granularity_balance_weight",
         type=float,
         default=0.01,
         help=(
-            "Weight of the router usage regularizer. patch_mindts uses an EMA "
+            "Weight of the router usage regularizer. patch_fusion uses an EMA "
             "minimum-usage floor; legacy ATGS retains batch balance"
         ),
     )
 
     parser.add_argument(
-        "--med_activity_granularity_entropy_weight",
+        "--activity_graph_granularity_entropy_weight",
         type=float,
         default=None,
         help=(
             "Weight of the router entropy-band regularizer. Defaults to 0.01 "
-            "for patch_mindts and 0.001 for legacy sample-level ATGS"
+            "for patch_fusion and 0.001 for legacy sample-level ATGS"
         ),
     )
 
     parser.add_argument(
-        "--med_activity_granularity_mix_shrinkage_weight",
+        "--activity_graph_granularity_mix_shrinkage_weight",
         type=float,
         default=0.005,
         help="Weight shrinking v4 sample-global and patch-local routing mixtures",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_prior_kl_weight",
+        "--activity_graph_granularity_prior_kl_weight",
         type=float,
         default=0.001,
         help="Weight keeping the v4 dataset-level routing prior near uniform",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_usage_floor",
+        "--activity_graph_granularity_usage_floor",
         type=float,
         default=0.05,
         help="Minimum long-run EMA usage assigned to every graph expert",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_usage_ema_decay",
+        "--activity_graph_granularity_usage_ema_decay",
         type=float,
         default=0.95,
-        help="EMA decay retained for patch_mindts long-run usage diagnostics",
+        help="EMA decay retained for patch_fusion long-run usage diagnostics",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_entropy_floor",
+        "--activity_graph_granularity_entropy_floor",
         type=float,
         default=None,
         help=(
             "Minimum normalized mean routing entropy allowed without a penalty; "
-            "defaults to 0.55 for patch_mindts and 0 for legacy routing"
+            "defaults to 0.55 for patch_fusion and 0 for legacy routing"
         ),
     )
 
     parser.add_argument(
-        "--med_activity_granularity_entropy_ceiling",
+        "--activity_graph_granularity_entropy_ceiling",
         type=float,
         default=1.0,
         help="Normalized mean Softmax entropy allowed without a penalty",
     )
 
     parser.add_argument(
-        "--med_activity_granularity_local_mix_max",
+        "--activity_graph_granularity_local_mix_max",
         type=float,
         default=0.50,
         help="Upper bound on the v4 patch-local routing mixture",
     )
     parser.add_argument(
-        "--med_activity_granularity_local_mix_init",
+        "--activity_graph_granularity_local_mix_init",
         type=float,
         default=0.10,
         help="Initial v4 patch-local routing mixture",
     )
     parser.add_argument(
-        "--med_activity_granularity_global_mix_max",
+        "--activity_graph_granularity_global_mix_max",
         type=float,
         default=0.75,
         help="Upper bound on the v4 sample-global routing mixture",
     )
     parser.add_argument(
-        "--med_activity_granularity_global_mix_init",
+        "--activity_graph_granularity_global_mix_init",
         type=float,
         default=0.50,
         help="Initial v4 sample-global routing mixture",
     )
     parser.add_argument(
-        "--med_activity_granularity_evidence_half_saturation",
+        "--activity_graph_granularity_evidence_half_saturation",
         type=float,
         default=0.05,
         help="Raw candidate dissimilarity yielding a 0.5 v4 evidence gate",
     )
     parser.add_argument(
-        "--med_activity_granularity_minimum_weight",
+        "--activity_graph_granularity_minimum_weight",
         type=float,
         default=0.0,
         help="Optional explicit minimum probability for every graph expert",
     )
     parser.add_argument(
-        "--med_activity_granularity_score_cap",
+        "--activity_graph_granularity_score_cap",
         type=float,
         default=1.0,
         help="Absolute cap applied to centered v4 routing logits",
     )
     parser.add_argument(
-        "--med_activity_granularity_scorer_hidden_dim",
+        "--activity_graph_granularity_scorer_hidden_dim",
         type=int,
         default=32,
         help="Hidden width of every scale-specific nonlinear v4.1 scorer",
     )
     parser.add_argument(
-        "--med_activity_granularity_confidence_half_saturation",
+        "--activity_graph_granularity_confidence_half_saturation",
         type=float,
         default=0.05,
         help=(
@@ -618,13 +618,13 @@ def parse_args():
             "concat_attn",
             "cross_attn_gate",
             "masked_pretrain",
-            "patch_mindts",
+            "patch_fusion",
             "adaptive_granularity",
         ],
         default="concat",
         help=(
             "How to fuse branch embeddings in the MLP path. "
-            "patch_mindts retains the historical post-encoding selector; "
+            "patch_fusion retains the historical post-encoding selector; "
             "adaptive_granularity selects 4/8/16 while constructing one "
             "Activity Graph, applies Line-Q/Graph-KV cross-attention, and "
             "uses concat_attn for final visual-Mantis fusion."
@@ -637,7 +637,7 @@ def parse_args():
         default=64,
         help=(
             "Length of the shared temporal patch used by line, Activity Graph, "
-            "and Mantis branches in patch_mindts"
+            "and Mantis branches in patch_fusion"
         ),
     )
 
@@ -645,7 +645,7 @@ def parse_args():
         "--outer_patch_stride",
         type=int,
         default=64,
-        help="Stride of the shared temporal patch in patch_mindts",
+        help="Stride of the shared temporal patch in patch_fusion",
     )
 
     parser.add_argument(
@@ -675,7 +675,7 @@ def parse_args():
         default=16,
         help=(
             "Micro-batch size for frozen line/Activity-Graph image encoding in "
-            "patch_mindts"
+            "patch_fusion"
         ),
     )
 
@@ -1012,140 +1012,140 @@ def parse_args():
     )
 
     args = parser.parse_args(normalize_cli_arguments(sys.argv[1:]))
-    if args.med_activity_granularity_bank is None:
-        args.med_activity_granularity_bank = ((4,), (8,), (16,))
-    if args.med_activity_granularity_temperature is None:
-        args.med_activity_granularity_temperature = 1.0
-    if args.med_activity_granularity_entropy_weight is None:
-        args.med_activity_granularity_entropy_weight = (
-            0.01 if args.modal_interaction == "patch_mindts" else 0.001
+    if args.activity_graph_granularity_bank is None:
+        args.activity_graph_granularity_bank = ((4,), (8,), (16,))
+    if args.activity_graph_granularity_temperature is None:
+        args.activity_graph_granularity_temperature = 1.0
+    if args.activity_graph_granularity_entropy_weight is None:
+        args.activity_graph_granularity_entropy_weight = (
+            0.01 if args.modal_interaction == "patch_fusion" else 0.001
         )
-    if args.med_activity_granularity_entropy_floor is None:
-        args.med_activity_granularity_entropy_floor = (
-            0.55 if args.modal_interaction == "patch_mindts" else 0.0
+    if args.activity_graph_granularity_entropy_floor is None:
+        args.activity_graph_granularity_entropy_floor = (
+            0.55 if args.modal_interaction == "patch_fusion" else 0.0
         )
-    if not 0.0 <= args.med_activity_channel_mix <= 1.0:
-        parser.error("--med_activity_channel_mix must be in [0, 1]")
+    if not 0.0 <= args.activity_graph_channel_mix <= 1.0:
+        parser.error("--activity_graph_channel_mix must be in [0, 1]")
     if (
-        not math.isfinite(args.med_activity_router_temperature)
-        or args.med_activity_router_temperature <= 0.0
+        not math.isfinite(args.activity_graph_router_temperature)
+        or args.activity_graph_router_temperature <= 0.0
     ):
-        parser.error("--med_activity_router_temperature must be positive")
-    if not 0.0 <= args.med_activity_router_mix <= 1.0:
-        parser.error("--med_activity_router_mix must be in [0, 1]")
-    if args.med_activity_granularity_hidden_dim <= 0:
-        parser.error("--med_activity_granularity_hidden_dim must be positive")
+        parser.error("--activity_graph_router_temperature must be positive")
+    if not 0.0 <= args.activity_graph_router_mix <= 1.0:
+        parser.error("--activity_graph_router_mix must be in [0, 1]")
+    if args.activity_graph_granularity_hidden_dim <= 0:
+        parser.error("--activity_graph_granularity_hidden_dim must be positive")
     if (
-        not math.isfinite(args.med_activity_granularity_temperature)
-        or args.med_activity_granularity_temperature <= 0.0
+        not math.isfinite(args.activity_graph_granularity_temperature)
+        or args.activity_graph_granularity_temperature <= 0.0
     ):
-        parser.error("--med_activity_granularity_temperature must be positive")
-    if not 0.0 < args.med_activity_granularity_base_prior < 1.0:
-        parser.error("--med_activity_granularity_base_prior must be in (0, 1)")
+        parser.error("--activity_graph_granularity_temperature must be positive")
+    if not 0.0 < args.activity_graph_granularity_base_prior < 1.0:
+        parser.error("--activity_graph_granularity_base_prior must be in (0, 1)")
     if (
-        not math.isfinite(args.med_activity_granularity_balance_weight)
-        or args.med_activity_granularity_balance_weight < 0.0
+        not math.isfinite(args.activity_graph_granularity_balance_weight)
+        or args.activity_graph_granularity_balance_weight < 0.0
     ):
         parser.error(
-            "--med_activity_granularity_balance_weight must be non-negative"
+            "--activity_graph_granularity_balance_weight must be non-negative"
         )
     if (
-        not math.isfinite(args.med_activity_granularity_entropy_weight)
-        or args.med_activity_granularity_entropy_weight < 0.0
+        not math.isfinite(args.activity_graph_granularity_entropy_weight)
+        or args.activity_graph_granularity_entropy_weight < 0.0
     ):
         parser.error(
-            "--med_activity_granularity_entropy_weight must be non-negative"
+            "--activity_graph_granularity_entropy_weight must be non-negative"
         )
     for option_name in (
-        "med_activity_granularity_mix_shrinkage_weight",
-        "med_activity_granularity_prior_kl_weight",
+        "activity_graph_granularity_mix_shrinkage_weight",
+        "activity_graph_granularity_prior_kl_weight",
     ):
         option_value = getattr(args, option_name)
         if not math.isfinite(option_value) or option_value < 0.0:
             parser.error(f"--{option_name} must be finite and non-negative")
     if (
-        not math.isfinite(args.med_activity_granularity_usage_floor)
-        or not 0.0 <= args.med_activity_granularity_usage_floor < 1.0
+        not math.isfinite(args.activity_graph_granularity_usage_floor)
+        or not 0.0 <= args.activity_graph_granularity_usage_floor < 1.0
     ):
-        parser.error("--med_activity_granularity_usage_floor must be in [0, 1)")
+        parser.error("--activity_graph_granularity_usage_floor must be in [0, 1)")
     if (
-        not math.isfinite(args.med_activity_granularity_usage_ema_decay)
-        or not 0.0 <= args.med_activity_granularity_usage_ema_decay < 1.0
+        not math.isfinite(args.activity_graph_granularity_usage_ema_decay)
+        or not 0.0 <= args.activity_graph_granularity_usage_ema_decay < 1.0
     ):
         parser.error(
-            "--med_activity_granularity_usage_ema_decay must be in [0, 1)"
+            "--activity_graph_granularity_usage_ema_decay must be in [0, 1)"
         )
     if (
-        not math.isfinite(args.med_activity_granularity_entropy_floor)
-        or not 0.0 <= args.med_activity_granularity_entropy_floor <= 1.0
+        not math.isfinite(args.activity_graph_granularity_entropy_floor)
+        or not 0.0 <= args.activity_graph_granularity_entropy_floor <= 1.0
     ):
         parser.error(
-            "--med_activity_granularity_entropy_floor must be in [0, 1]"
+            "--activity_graph_granularity_entropy_floor must be in [0, 1]"
         )
     if (
-        not math.isfinite(args.med_activity_granularity_entropy_ceiling)
-        or not 0.0 <= args.med_activity_granularity_entropy_ceiling <= 1.0
+        not math.isfinite(args.activity_graph_granularity_entropy_ceiling)
+        or not 0.0 <= args.activity_graph_granularity_entropy_ceiling <= 1.0
     ):
         parser.error(
-            "--med_activity_granularity_entropy_ceiling must be in [0, 1]"
+            "--activity_graph_granularity_entropy_ceiling must be in [0, 1]"
         )
     if (
-        args.med_activity_granularity_entropy_floor
-        > args.med_activity_granularity_entropy_ceiling
+        args.activity_graph_granularity_entropy_floor
+        > args.activity_graph_granularity_entropy_ceiling
     ):
         parser.error(
-            "--med_activity_granularity_entropy_floor cannot exceed the ceiling"
+            "--activity_graph_granularity_entropy_floor cannot exceed the ceiling"
         )
     for prefix in ("local", "global"):
-        maximum = getattr(args, f"med_activity_granularity_{prefix}_mix_max")
-        initial = getattr(args, f"med_activity_granularity_{prefix}_mix_init")
+        maximum = getattr(args, f"activity_graph_granularity_{prefix}_mix_max")
+        initial = getattr(args, f"activity_graph_granularity_{prefix}_mix_init")
         if not math.isfinite(maximum) or not 0.0 < maximum <= 1.0:
             parser.error(
-                f"--med_activity_granularity_{prefix}_mix_max must be in (0, 1]"
+                f"--activity_graph_granularity_{prefix}_mix_max must be in (0, 1]"
             )
         if not math.isfinite(initial) or not 0.0 < initial < maximum:
             parser.error(
-                f"--med_activity_granularity_{prefix}_mix_init must be in (0, max)"
+                f"--activity_graph_granularity_{prefix}_mix_init must be in (0, max)"
             )
     if (
         not math.isfinite(
-            args.med_activity_granularity_evidence_half_saturation
+            args.activity_graph_granularity_evidence_half_saturation
         )
-        or args.med_activity_granularity_evidence_half_saturation <= 0.0
+        or args.activity_graph_granularity_evidence_half_saturation <= 0.0
     ):
         parser.error(
-            "--med_activity_granularity_evidence_half_saturation must be positive"
-        )
-    if (
-        not math.isfinite(args.med_activity_granularity_minimum_weight)
-        or args.med_activity_granularity_minimum_weight < 0.0
-    ):
-        parser.error(
-            "--med_activity_granularity_minimum_weight must be non-negative"
+            "--activity_graph_granularity_evidence_half_saturation must be positive"
         )
     if (
-        not math.isfinite(args.med_activity_granularity_score_cap)
-        or args.med_activity_granularity_score_cap <= 0.0
+        not math.isfinite(args.activity_graph_granularity_minimum_weight)
+        or args.activity_graph_granularity_minimum_weight < 0.0
     ):
-        parser.error("--med_activity_granularity_score_cap must be positive")
-    if args.med_activity_granularity_scorer_hidden_dim <= 0:
         parser.error(
-            "--med_activity_granularity_scorer_hidden_dim must be positive"
+            "--activity_graph_granularity_minimum_weight must be non-negative"
+        )
+    if (
+        not math.isfinite(args.activity_graph_granularity_score_cap)
+        or args.activity_graph_granularity_score_cap <= 0.0
+    ):
+        parser.error("--activity_graph_granularity_score_cap must be positive")
+    if args.activity_graph_granularity_scorer_hidden_dim <= 0:
+        parser.error(
+            "--activity_graph_granularity_scorer_hidden_dim must be positive"
         )
     if (
         not math.isfinite(
-            args.med_activity_granularity_confidence_half_saturation
+            args.activity_graph_granularity_confidence_half_saturation
         )
-        or args.med_activity_granularity_confidence_half_saturation <= 0.0
+        or args.activity_graph_granularity_confidence_half_saturation <= 0.0
     ):
         parser.error(
-            "--med_activity_granularity_confidence_half_saturation must be positive"
+            "--activity_graph_granularity_confidence_half_saturation must be positive"
         )
     if args.patch_router_top_k <= 0:
         parser.error("--patch_router_top_k must be positive")
     if (
         args.patch_granularity_router_mode == "adaptive_v5"
-        and args.patch_router_top_k > len(args.med_activity_granularity_bank)
+        and args.patch_router_top_k > len(args.activity_graph_granularity_bank)
     ):
         parser.error(
             "--patch_router_top_k cannot exceed the number of graph experts "
@@ -1270,94 +1270,94 @@ def parse_args():
         parser.error(
             "--granularity_freeze_gate requires --granularity_gate_checkpoint"
         )
-    if args.med_activity_adaptive_granularity:
-        if args.image_mode != "med_activity_graph":
+    if args.activity_graph_adaptive_granularity:
+        if args.image_mode != "multiscale_activity_graph":
             parser.error(
-                "--med_activity_adaptive_granularity requires "
-                "--image_mode med_activity_graph"
+                "--activity_graph_adaptive_granularity requires "
+                "--image_mode multiscale_activity_graph"
             )
         if args.classifier_type != "mlp":
             parser.error(
-                "--med_activity_adaptive_granularity requires "
+                "--activity_graph_adaptive_granularity requires "
                 "--classifier_type mlp"
             )
         if not (args.vit_1_name or args.vit_2_name):
             parser.error(
-                "--med_activity_adaptive_granularity requires at least one ViT branch"
+                "--activity_graph_adaptive_granularity requires at least one ViT branch"
             )
         if (
-            any(len(regime) != 1 for regime in args.med_activity_granularity_bank)
-            and args.med_activity_granularity_bank.count(
-                args.med_activity_patch_lengths
+            any(len(regime) != 1 for regime in args.activity_graph_granularity_bank)
+            and args.activity_graph_granularity_bank.count(
+                args.activity_graph_patch_lengths
             )
             != 1
         ):
             parser.error(
-                "--med_activity_granularity_bank must contain "
-                "--med_activity_patch_lengths exactly once"
+                "--activity_graph_granularity_bank must contain "
+                "--activity_graph_patch_lengths exactly once"
             )
-    if args.modal_interaction == "patch_mindts":
+    if args.modal_interaction == "patch_fusion":
         if args.classifier_type != "mlp":
-            parser.error("--modal_interaction patch_mindts requires --classifier_type mlp")
-        if args.image_mode != "med_activity_graph":
+            parser.error("--modal_interaction patch_fusion requires --classifier_type mlp")
+        if args.image_mode != "multiscale_activity_graph":
             parser.error(
-                "--modal_interaction patch_mindts requires "
-                "--image_mode med_activity_graph"
+                "--modal_interaction patch_fusion requires "
+                "--image_mode multiscale_activity_graph"
             )
-        if not args.med_activity_adaptive_granularity:
+        if not args.activity_graph_adaptive_granularity:
             parser.error(
-                "--modal_interaction patch_mindts requires "
-                "--med_activity_adaptive_granularity"
+                "--modal_interaction patch_fusion requires "
+                "--activity_graph_adaptive_granularity"
             )
         if not args.vit_1_name:
-            parser.error("--modal_interaction patch_mindts requires --vit_1_name")
+            parser.error("--modal_interaction patch_fusion requires --vit_1_name")
         if args.aggregation not in {"mean", "cls_token"}:
             parser.error(
-                "patch_mindts requires --aggregation mean or --aggregation cls_token"
+                "patch_fusion requires --aggregation mean or --aggregation cls_token"
             )
         if args.vit_1_layer is None or (
             args.vit_1_layer != -1 and args.vit_1_layer <= 0
         ):
             parser.error(
-                "patch_mindts requires --vit_1_layer to be a positive integer or -1"
+                "patch_fusion requires --vit_1_layer to be a positive integer or -1"
             )
         if args.vit_2_name:
             parser.error(
-                "patch_mindts uses one shared visual encoder; --vit_2_name is not supported"
+                "patch_fusion uses one shared visual encoder; --vit_2_name is not supported"
             )
         if not args.mantis:
-            parser.error("--modal_interaction patch_mindts requires --mantis")
+            parser.error("--modal_interaction patch_fusion requires --mantis")
         if args.moment:
-            parser.error("patch_mindts does not use MOMENT in its first implementation")
-        if len(args.med_activity_granularity_bank) != 3:
-            parser.error("patch_mindts requires exactly three Activity Graph regimes")
+            parser.error("patch_fusion does not use MOMENT in its first implementation")
+        if len(args.activity_graph_granularity_bank) != 3:
+            parser.error("patch_fusion requires exactly three Activity Graph regimes")
         regime_widths = {
-            len(regime) for regime in args.med_activity_granularity_bank
+            len(regime) for regime in args.activity_graph_granularity_bank
         }
         if regime_widths != {1}:
             parser.error(
-                "patch_mindts requires three single-scale waveform experts"
+                "patch_fusion requires three single-scale waveform experts"
             )
-        if len(set(args.med_activity_granularity_bank)) != 3:
+        if len(set(args.activity_graph_granularity_bank)) != 3:
             parser.error(
-                "patch_mindts Activity Graph experts must be distinct"
+                "patch_fusion Activity Graph experts must be distinct"
             )
-        if args.med_activity_granularity_usage_floor > 1.0 / len(
-            args.med_activity_granularity_bank
+        if args.activity_graph_granularity_usage_floor > 1.0 / len(
+            args.activity_graph_granularity_bank
         ):
             parser.error(
-                "--med_activity_granularity_usage_floor cannot exceed "
-                "uniform per-expert usage in patch_mindts"
+                "--activity_graph_granularity_usage_floor cannot exceed "
+                "uniform per-expert usage in patch_fusion"
             )
-        if args.med_activity_granularity_minimum_weight >= 1.0 / len(
-            args.med_activity_granularity_bank
+        if args.activity_graph_granularity_minimum_weight >= 1.0 / len(
+            args.activity_graph_granularity_bank
         ):
             parser.error(
-                "--med_activity_granularity_minimum_weight must be below "
+                "--activity_graph_granularity_minimum_weight must be below "
                 "uniform per-expert usage"
             )
         maximum_internal_scale = max(
-            max(regime) for regime in args.med_activity_granularity_bank
+            max(regime) for regime in args.activity_graph_granularity_bank
         )
         if args.outer_patch_size <= maximum_internal_scale:
             parser.error(
@@ -1370,12 +1370,12 @@ def parse_args():
                 "that would leave time points uncovered"
             )
         if args.fusion_dim <= 0:
-            parser.error("--fusion_dim must be positive in patch_mindts")
+            parser.error("--fusion_dim must be positive in patch_fusion")
         if args.fusion_heads <= 0:
-            parser.error("--fusion_heads must be positive in patch_mindts")
+            parser.error("--fusion_heads must be positive in patch_fusion")
         if args.fusion_dim % args.fusion_heads != 0:
             parser.error(
-                "--fusion_dim must be divisible by --fusion_heads in patch_mindts"
+                "--fusion_dim must be divisible by --fusion_heads in patch_fusion"
             )
     if args.modal_interaction == "adaptive_granularity":
         if args.classifier_type != "mlp":
@@ -1383,19 +1383,19 @@ def parse_args():
                 "--modal_interaction adaptive_granularity requires "
                 "--classifier_type mlp"
             )
-        if args.image_mode != "med_activity_graph":
+        if args.image_mode != "multiscale_activity_graph":
             parser.error(
                 "--modal_interaction adaptive_granularity requires "
-                "--image_mode med_activity_graph"
+                "--image_mode multiscale_activity_graph"
             )
         if args.aggregation not in {"mean", "cls_token"}:
             parser.error(
                 "adaptive_granularity requires --aggregation mean or cls_token"
             )
-        if args.med_activity_adaptive_granularity:
+        if args.activity_graph_adaptive_granularity:
             parser.error(
                 "adaptive_granularity performs its own pre-render selection; "
-                "do not enable the historical --med_activity_adaptive_granularity bank"
+                "do not enable the historical --activity_graph_adaptive_granularity bank"
             )
         if not args.vit_1_name:
             parser.error(

@@ -16,7 +16,7 @@ from src.adaptive_graph_training import (
     NEUROSIGVIA_CACHE_ARCHITECTURE, save_adaptive_graph_feature_cache,
     load_adaptive_graph_feature_cache,
 )
-from src.patch_mindts import make_temporal_patches
+from src.patch_fusion import make_temporal_patches
 
 
 class StaticReuseTests(unittest.TestCase):

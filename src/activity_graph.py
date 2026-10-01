@@ -50,6 +50,7 @@ def paper_signal_order(num_channels: int) -> tuple[int, ...]:
     if num_channels == 1:
         return (0,)
 
+    # 通道 ID 从 0 开始；不断扩展序列，直到每对不同通道都曾相邻出现。
     order = list(range(num_channels))
     covered = {
         _edge(left, right)
@@ -110,6 +111,7 @@ def paper_signal_order(num_channels: int) -> tuple[int, ...]:
 def paper_multicolumn_indices(num_channels: int) -> tuple[tuple[int, int, int], ...]:
     """Return paper Algorithm 3 rows as ``(previous, current, next)`` IDs."""
 
+    # 每行按前一、当前、后一通道排三列，首尾按循环序列连接。
     order = paper_signal_order(num_channels)
     return tuple(
         (order[row - 1], signal_id, order[(row + 1) % len(order)])
@@ -153,12 +155,14 @@ def block_average_waveform(
 
     if block_length <= 1:
         return signals
+    # 输入和输出均为 [B,C,T]；按块求有效样本均值，再展开回原时间轴。
     batch_size, channels, time_steps = signals.shape
     sample_positions = torch.arange(time_steps, device=signals.device)
     valid = sample_positions[None, :] < valid_lengths[:, None]
     block_ids = sample_positions.div(block_length, rounding_mode="floor")
     block_count = int(block_ids[-1].item()) + 1
     expanded_ids = block_ids.view(1, 1, -1).expand(batch_size, channels, -1)
+    # 尾部填充不参与分子和计数，避免不足一块时把均值拉向零。
     sums = signals.new_zeros((batch_size, channels, block_count))
     sums.scatter_add_(2, expanded_ids, signals * valid[:, None, :])
     counts = signals.new_zeros((batch_size, 1, block_count))
@@ -188,6 +192,7 @@ def _normalize_waveform_lanes(
     sample_positions = torch.arange(time_steps, device=signals.device)
     valid = sample_positions[None, None, :] < valid_lengths[:, None, None]
     finite = torch.nan_to_num(signals, nan=0.0, posinf=0.0, neginf=0.0)
+    # 每个样本、每个通道独立缩放；常值通道置于中线，填充段不影响范围。
     minimum = finite.masked_fill(~valid, float("inf")).amin(dim=-1, keepdim=True)
     maximum = finite.masked_fill(~valid, float("-inf")).amax(dim=-1, keepdim=True)
     span = maximum - minimum
@@ -238,6 +243,7 @@ def render_paper_activity_graph(
         raise ValueError("vertical_margin must lie in [0, 0.5)")
 
     output_dtype = signals.dtype
+    # 半精度输入也用 float32 计算栅格距离，最终图像恢复输入 dtype。
     working_dtype = torch.float64 if signals.dtype == torch.float64 else torch.float32
     working = signals.to(dtype=working_dtype)
     batch_size, channels, time_steps = working.shape
@@ -279,6 +285,7 @@ def render_paper_activity_graph(
         samples_y[:, :, 1] = torch.where(singleton[:, None], samples_y[:, :, 0], samples_y[:, :, 1])
     distance_squared = None
     segment_count = samples_x.shape[-1] - 1
+    # 每批处理 32 条原始采样线段，累积像素到有效线段的最短距离以控制内存。
     for start in range(0, segment_count, 32):
         stop = min(start + 32, segment_count)
         ax = samples_x[:, start:stop].view(batch_size, 1, 1, 1, -1)
@@ -293,8 +300,10 @@ def render_paper_activity_graph(
         distances = distances.masked_fill(~valid_segments[:, None, None, None, :], float("inf"))
         nearest = distances.amin(dim=-1)
         distance_squared = nearest if distance_squared is None else torch.minimum(distance_squared, nearest)
+    # 距离经连续函数转为黑线白底像素；此处保留波形到图像的自动求导路径。
     sigma = max(float(line_width) / 2.354820045, 0.25)
     lanes = 1.0 - torch.exp(-0.5 * distance_squared / sigma**2)
+    # 将通道波形按论文的行顺序和三列布局拼接，最后复制灰度通道得到 RGB。
     panels = lanes.index_select(1, layout.reshape(-1)).reshape(
         batch_size, row_count, 3, lane_height, panel_width
     )
@@ -390,6 +399,7 @@ class ActivityGraphRenderer(nn.Module):
         lengths = _coerce_valid_lengths(
             valid_lengths, tensor.shape[0], tensor.shape[2], tensor.device
         )
+        # 可选固定粒度只平滑波形；随后统一使用相同的通道排列和三列绘图规则。
         if self.granularity is not None:
             tensor = block_average_waveform(tensor, lengths, self.granularity)
         return render_paper_activity_graph(
@@ -437,21 +447,16 @@ class TemporalGranularityGraphBank(nn.Module):
         self.img_size = int(img_size)
 
     def forward(self, signals):
+        # K 个固定粒度分别渲染，输出 [B,K,3,H,W]，本模块不进行粒度选择。
         return torch.stack([graph(signals) for graph in self.graphs], dim=1)
 
 
 # Backward-compatible public names.
-MedActitivy_graph = ActivityGraphRenderer
-MedActivityGraph = ActivityGraphRenderer
-MedActivityGranularityBank = TemporalGranularityGraphBank
 MultiGranularityGraphBank = TemporalGranularityGraphBank
 
 
 __all__ = [
     "ActivityGraphRenderer",
-    "MedActivityGraph",
-    "MedActivityGranularityBank",
-    "MedActitivy_graph",
     "MultiGranularityGraphBank",
     "PAPER_ACTIVITY_GRAPH_CANVAS_SIZE",
     "PAPER_ACTIVITY_GRAPH_DOI",

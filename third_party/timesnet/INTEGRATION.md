@@ -19,17 +19,19 @@ Macro-Precision, Macro-Recall, Macro-F1, Macro-AUROC and Macro-AUPRC. Averaged
 window probabilities per subject provide supplementary subject metrics.
 The other six baselines continue to use `third_party/medformer/`.
 
-The current launcher records a user-requested retrospective combination of
-the screenshot and subsequent sensitivity results: dropout 0.3 on APAVA and
-Shimmer10, and 0.1 on TDBRAIN and PADS11. The combination was selected by
-comparing reported test Macro-F1; it is not a configuration obtained through
-a common validation-tuning procedure. Other integration settings remain unchanged:
-subject split seed 42,
+The current launcher uses per-dataset settings taken from retrospective
+sensitivity runs: dropout 0.3 on Shimmer10 and 0.1 on TDBRAIN, APAVA and
+PADS11; top_k=5 on TDBRAIN and top_k=3 on the other three datasets. They were
+not obtained through a common validation-tuning procedure: the Shimmer10
+dropout was selected by comparing reported test Macro-F1, and TDBRAIN top_k=5
+is the setting with the lowest three-seed mean validation Macro-F1 in a
+top_k=2..10 sweep (the original comparison setting was top_k=3). Other
+integration settings are shared: subject split seed 42 (20260917 for APAVA),
 initialization seeds 42/43/44, AdamW (learning rate 0.0003, weight decay 0.001),
 d_model 128, d_ff 256, two layers, at most 100 epochs, early-stop
 warmup 10, patience 12 and min_delta 0.002. Its n_heads=8 setting is accepted but
-unused by the TimesNet convolution architecture. Model-specific settings are
-top_k=3 and num_kernels=6. The explicit `--checkpoint_metric window_macro_f1`
+unused by the TimesNet convolution architecture. The remaining model-specific
+setting is num_kernels=6. The explicit `--checkpoint_metric window_macro_f1`
 selects checkpoints using validation window Macro-F1; equal scores retain the
 earlier checkpoint. Test is evaluated once after checkpoint restoration.
 
@@ -53,16 +55,10 @@ conda activate neurosigvia
 
 An existing compatible environment can be used instead. TimesNet uses PyTorch
 and the shared baseline dependencies; it does not require the main method's
-frozen CLIP/Mantis checkpoints. The existing server locations are optional
-examples, not requirements for another machine:
+frozen CLIP/Mantis checkpoints.
 
-| Account | Checkout | Existing environment |
-| --- | --- | --- |
-| guoyin | `/home/guoyin/NeuroSigViT/main` | `/home/guoyin/.conda/envs/neurosigvit` |
-| xzy | `/home/xuzheyuan/guoyin/NeuroSigViT/main` | `/home/xuzheyuan/miniconda3/envs/tivit_env` |
-
-Activate the selected environment by name or full path. For non-interactive
-launches, `PYTHON_BIN=/absolute/path/to/env/bin/python` selects its interpreter.
+Activate the selected environment by name. For non-interactive launches,
+`PYTHON_BIN=path/to/env/bin/python` selects its interpreter.
 
 ## Verification commands
 

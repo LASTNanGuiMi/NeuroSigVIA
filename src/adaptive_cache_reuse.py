@@ -15,9 +15,10 @@ from src.adaptive_graph_training import (
     NEUROSIGVIA_STATIC_KEYS, _cache_label_array, _validate_static_bundle,
     save_adaptive_graph_feature_cache,
 )
-from src.patch_mindts import PATCH_TAIL_POLICY, make_temporal_patches
+from src.patch_fusion import PATCH_TAIL_POLICY, make_temporal_patches
 
 
+# 候选搜索先只读取签名，避免为每个候选加载完整特征数组。
 def _peek_signature(path):
     """Read only the small signature member while discovering candidates."""
     with zipfile.ZipFile(path) as archive:
@@ -27,6 +28,7 @@ def _peek_signature(path):
 
 def _read_candidate(path, signature, architecture, labels, channels, window_size, stride):
     with np.load(path, allow_pickle=False) as cached:
+        # 同时匹配缓存格式、架构、窗口参数和标签，不能只凭文件名复用。
         expected = {
             'schema_version': NEUROSIGVIA_CACHE_SCHEMA_VERSION,
             'architecture': architecture,
@@ -50,6 +52,7 @@ def _read_candidate(path, signature, architecture, labels, channels, window_size
 
 def _verify_raw_against_loader(bundle, loader, window_size, stride):
     """Catch split swaps and stale input by checking every ordered raw window."""
+    # 逐样本核对依赖稳定顺序，因此禁止乱序采样或丢弃最后一个批次。
     if not isinstance(loader.sampler, SequentialSampler) or loader.drop_last:
         raise ValueError('cache reuse requires a sequential loader without drop_last')
     offset = 0
@@ -90,6 +93,7 @@ def promote_adaptive_static_caches(
                'verified_raw_against_loader': False, 'sources': []}
     if not root.is_dir():
         return receipt
+    # 历史签名须由调用方先验证提取代码等价；当前签名可直接参加匹配。
     accepted = dict(legacy_signatures)
     accepted[str(signature)] = NEUROSIGVIA_CACHE_ARCHITECTURE
     needed = {name: pair for name, pair in split_loaders.items()
@@ -98,7 +102,7 @@ def promote_adaptive_static_caches(
         return dict(receipt, status='destination_present')
 
     candidates = []
-    # Only current and explicitly known historical filenames are considered.
+    # 只搜索当前命名和已明确支持的历史命名。
     for filename in ('adaptive_graph_train.npz', 'timemosaic_graph_train.npz'):
         for path in sorted(root.rglob(filename)):
             if path.parent.resolve() == destination.resolve():
@@ -117,6 +121,7 @@ def promote_adaptive_static_caches(
                 continue
             bundle = _read_candidate(source, recorded, accepted[recorded], labels,
                                      channels, window_size, stride)
+            # 对所有原始窗口及有效长度逐项核对，通过后写入新缓存，保留来源缓存。
             _verify_raw_against_loader(bundle, loader, window_size, stride)
             target = destination / f'adaptive_graph_{name}.npz'
             save_adaptive_graph_feature_cache(target, bundle, labels, signature,

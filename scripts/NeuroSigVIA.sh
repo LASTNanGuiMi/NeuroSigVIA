@@ -29,8 +29,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -85,8 +85,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -141,8 +141,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -205,8 +205,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -261,8 +261,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -317,8 +317,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -381,8 +381,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -437,8 +437,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -493,8 +493,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -556,8 +556,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -573,7 +573,7 @@ python \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
   --patch_alignment_weight 0.1 \
-  --patch_checkpoint_metric window_macro_f1 \
+  --patch_checkpoint_metric subject_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
@@ -611,8 +611,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -628,7 +628,7 @@ python \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
   --patch_alignment_weight 0.1 \
-  --patch_checkpoint_metric window_macro_f1 \
+  --patch_checkpoint_metric subject_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
@@ -666,8 +666,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -683,7 +683,7 @@ python \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
   --patch_alignment_weight 0.1 \
-  --patch_checkpoint_metric window_macro_f1 \
+  --patch_checkpoint_metric subject_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
@@ -729,8 +729,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -745,15 +745,15 @@ python \
   --activity_graph_vertical_margin 0.05 \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
-  --patch_alignment_weight 0.1 \
+  --patch_alignment_weight 0.05 \
   --patch_checkpoint_metric window_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
   --mlp_hidden_dim 128 \
   --mlp_num_layers 2 \
-  --mlp_dropout 0.1 \
-  --mlp_lr 3e-4 \
+  --mlp_dropout 0.2 \
+  --mlp_lr 1e-4 \
   --mlp_weight_decay 1e-3 \
   --mlp_class_weight balanced \
   --mlp_epochs 100 \
@@ -766,7 +766,7 @@ python \
   --mlp_lr_scheduler_patience 4 \
   --mlp_lr_scheduler_factor 0.5 \
   --mlp_lr_scheduler_min_lr 1e-6 \
-  --batch_size 4 \
+  --batch_size 16 \
   --random_seed 42 \
   --feature_cache_dir "$CACHE_ROOT/seed42/pads11" \
   --reuse_static_cache_dir "${REUSE_STATIC_CACHE_DIR:-feature_cache}" \
@@ -784,8 +784,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -800,15 +800,15 @@ python \
   --activity_graph_vertical_margin 0.05 \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
-  --patch_alignment_weight 0.1 \
+  --patch_alignment_weight 0.05 \
   --patch_checkpoint_metric window_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
   --mlp_hidden_dim 128 \
   --mlp_num_layers 2 \
-  --mlp_dropout 0.1 \
-  --mlp_lr 3e-4 \
+  --mlp_dropout 0.2 \
+  --mlp_lr 1e-4 \
   --mlp_weight_decay 1e-3 \
   --mlp_class_weight balanced \
   --mlp_epochs 100 \
@@ -821,7 +821,7 @@ python \
   --mlp_lr_scheduler_patience 4 \
   --mlp_lr_scheduler_factor 0.5 \
   --mlp_lr_scheduler_min_lr 1e-6 \
-  --batch_size 4 \
+  --batch_size 16 \
   --random_seed 43 \
   --feature_cache_dir "$CACHE_ROOT/seed43/pads11" \
   --reuse_static_cache_dir "${REUSE_STATIC_CACHE_DIR:-feature_cache}" \
@@ -839,8 +839,8 @@ python \
   --vit_1_name "${MODEL_DIR:-${NEUROSIGVIA_CLIP_PATH:-../models/CLIP-ViT-H-14-laion2B-s32B-b79K}}" \
   --vit_1_layer 14 \
   --aggregation mean \
-  --image_mode med_activity_graph \
-  --med_activity_granularity_hidden_dim 64 \
+  --image_mode multiscale_activity_graph \
+  --activity_graph_granularity_hidden_dim 64 \
   --mantis \
   --mantis_name "${MANTIS_DIR:-${NEUROSIGVIA_MANTIS_PATH:-../models/Mantis-8M}}" \
   --classifier_type mlp \
@@ -855,15 +855,15 @@ python \
   --activity_graph_vertical_margin 0.05 \
   --patch_alignment_dim 256 \
   --patch_alignment_temperature 0.1 \
-  --patch_alignment_weight 0.1 \
+  --patch_alignment_weight 0.05 \
   --patch_checkpoint_metric window_macro_f1 \
   --visual_encode_batch_size 4 \
   --fusion_dim 128 \
   --fusion_heads 2 \
   --mlp_hidden_dim 128 \
   --mlp_num_layers 2 \
-  --mlp_dropout 0.1 \
-  --mlp_lr 3e-4 \
+  --mlp_dropout 0.2 \
+  --mlp_lr 1e-4 \
   --mlp_weight_decay 1e-3 \
   --mlp_class_weight balanced \
   --mlp_epochs 100 \
@@ -876,7 +876,7 @@ python \
   --mlp_lr_scheduler_patience 4 \
   --mlp_lr_scheduler_factor 0.5 \
   --mlp_lr_scheduler_min_lr 1e-6 \
-  --batch_size 4 \
+  --batch_size 16 \
   --random_seed 44 \
   --feature_cache_dir "$CACHE_ROOT/seed44/pads11" \
   --reuse_static_cache_dir "${REUSE_STATIC_CACHE_DIR:-feature_cache}" \
