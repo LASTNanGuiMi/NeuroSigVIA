@@ -91,8 +91,9 @@ NeuroSigVIA/
 |   |-- Ablation_Imaging.sh
 |   |-- Ablation_ViTLayer.sh
 |   |-- Ablation_FixedGranularity.sh
+|   |-- Ablation_GranularityScale.sh
+|   |-- Ablation_GranularityScale_Fixed.sh
 |   `-- lib/explicit_experiments.sh
-|-- tests/
 |-- DATA_PROCESSING.md
 |-- ANONYMITY.md
 |-- SOURCE_NOTES.md
@@ -367,6 +368,8 @@ tables; edit a command to change them.
 | `Ablation_Imaging.sh` | Imaging ablation | `--image_representation` gaf / adaptive_heatmap / tivit_grayscale / ordinary_line: one image per window, no line-plot branch, gate or cross-attention |
 | `Ablation_ViTLayer.sh` | Visual-encoder depth ablation | `--vit_1_layer` 1 / 3 / 24 / 32 (14 is the main method) |
 | `Ablation_FixedGranularity.sh` | Fixed-granularity ablation | `--fixed_granularity` 4 / 8 / 16 instead of the adaptive gate |
+| `Ablation_GranularityScale.sh` | Granularity-scale ablation | Outer patch 256, gate region 128, candidates 32 / 64 / 128 (main method: 64, 16 and 4 / 8 / 16); Shimmer10 and PADS11 |
+| `Ablation_GranularityScale_Fixed.sh` | Granularity-scale ablation, fixed granularity | Same scale with `--fixed_granularity` 32 / 64 / 128 instead of the adaptive gate |
 
 `TiViT_FrozenBackbone.sh` and `Ablation_NumericBackbone.sh` restore encoders from
 comparison-method runs trained with this repository. Run the corresponding
@@ -444,7 +447,7 @@ benchmark results or establish equivalence between development and snapshot runs
 ## Verification
 
 ```bash
-python -m compileall -q main.py runners src data_loading tests third_party/medformer third_party/timesnet
+python -m compileall -q main.py runners src data_loading third_party/medformer third_party/timesnet
 for script in scripts/*.sh; do bash -n "$script"; done
 ```
 

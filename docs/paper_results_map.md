@@ -4,8 +4,9 @@ Status on 2026-10-01. This file records which launcher corresponds to each
 group of saved paper results and how closely the launcher matches the runs that
 produced them.
 
-The index is `saved_results/provenance.csv`: 369 records, one per
-table × method × dataset × seed (four datasets, seeds 42/43/44). Verify it
+The index is `saved_results/provenance.csv`: 393 records, one per
+table × method × dataset × seed (seeds 42/43/44; four datasets, except the
+granularity-scale group, which covers Shimmer10 and PADS11). Verify it
 from the repository root:
 
 ```bash
@@ -30,6 +31,7 @@ that the six test metrics in the index equal the values in the metric files.
 | Visual | GAF, Adaptive Heatmap, Grayscale Image, Line Plot | 48 | `scripts/Ablation_Imaging.sh` | Arguments equal the saved `args.json` |
 | Layer | L1, L3, L24, L32 | 48 | `scripts/Ablation_ViTLayer.sh` | Arguments equal the saved `args.json` |
 | FixedGranularity | q=4, q=8, q=16 | 36 | `scripts/Ablation_FixedGranularity.sh` | Arguments equal the saved `args.json` |
+| GranularityScale | adaptive, q=32, q=64, q=128 | 6 + 18 | `scripts/Ablation_GranularityScale.sh`, `scripts/Ablation_GranularityScale_Fixed.sh` | The saved runs were started from these launchers |
 
 In the numeric feature-extractor table, the "CNNs" row is the TimesNet
 replacement and the "Transformers" row is the mean of the Medformer, PatchTST

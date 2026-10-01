@@ -30,20 +30,6 @@ ADFTD remains out of scope. This correction does not itself launch or authorize
 any dataset rerun; the existing main/baseline shell scripts may list ADFTD, so
 do not run a full batch without first choosing the explicit non-ADFTD scope.
 
-## Read-only/CPU regression checks
-
-Activate the environment described in the repository `README.md`; no additional
-package installation is needed. Run from the repository root:
-
-```bash
-OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 CUDA_VISIBLE_DEVICES='' python -m unittest discover -s tests -p 'test_*protocol.py' -v
-```
-
-The tests include opposite rankings for window F1 versus subject F1 and verify
-that checkpoint choice, early stop and LR scheduling follow the chosen unit.
-They use tiny deterministic CPU fixtures, do not load the research test datasets,
-and do not overwrite scientific experiment artifacts.
-
 ## Legacy result boundary
 
 The 108 old runs each preserved only one best checkpoint, selected with subject

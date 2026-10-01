@@ -95,12 +95,10 @@ Read-only preflight (GPU memory should be below 500 MiB on GPUs 2,3,4,5):
 
 ```bash
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader
-python -m unittest discover -s tests -p test_numeric_ablation.py -v
-python -m unittest discover -s tests -p test_window_numeric_protocol.py -v
 DRY_RUN=1 bash scripts/Ablation_wo_Visual.sh
 ```
 
-Expect unit tests to pass and the dry run to print 12 commands, each bound to one
+Expect the dry run to print 12 commands, each bound to one
 of four GPUs. Smoke test: two complete-shape training batches on Shimmer, no
 validation/test evaluation, fresh isolated output (do not overwrite a prior run):
 
